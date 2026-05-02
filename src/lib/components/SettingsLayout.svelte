@@ -76,7 +76,7 @@
     { id: "about", label: t("settings.section.about"), section: "Help" },
   ]);
 
-  const hiddenOnCompact = new Set<string>(["cli", "shortcuts", "about"]);
+  const hiddenOnCompact = new Set<string>(["cli", "shortcuts"]);
   let menu = $derived(compact ? allMenu.filter(m => !hiddenOnCompact.has(m.id)) : allMenu);
 
   let sections = $derived((() => {
