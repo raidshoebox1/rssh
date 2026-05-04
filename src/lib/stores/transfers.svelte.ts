@@ -7,12 +7,14 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { errMsg } from "../i18n/index.svelte.ts";
 
 export type TransferKind = "download" | "upload";
 export type TransferStatus = "running" | "done" | "failed" | "cancelled";
 
-/// 后端用这个文本标记"用户主动取消"和"出错"。看到它前端把状态归为 cancelled。
-const CANCELLED_TAG = "传输已取消";
+/// 后端用这个 i18n code 标记"用户主动取消"。errStr 包含 `__rssh_err__|{"code":"transfer_cancelled",...}`
+/// 时识别为 cancelled。对应 src-tauri/src/ssh/sftp.rs::CANCELLED_CODE，前后端必须保持一致。
+const CANCELLED_TAG = "transfer_cancelled";
 
 export interface Transfer {
   id: string;
@@ -93,11 +95,12 @@ async function runTransfer(id: string): Promise<void> {
       cur.finishedAt = Date.now();
     }
   } catch (e) {
-    const errStr = String(e);
+    // 先用裸 String(e) 识别 cancel 标记（协议串），再用 errMsg(e) 翻译展示。
+    const rawStr = String(e);
     const cur = find(id);
     if (cur) {
-      cur.status = errStr.includes(CANCELLED_TAG) ? "cancelled" : "failed";
-      cur.error = errStr;
+      cur.status = rawStr.includes(CANCELLED_TAG) ? "cancelled" : "failed";
+      cur.error = errMsg(e);
       cur.finishedAt = Date.now();
     }
   } finally {

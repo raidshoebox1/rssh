@@ -6,6 +6,7 @@ use russh::client;
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg};
 use russh::ChannelMsg;
+use serde_json::json;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -91,7 +92,7 @@ where
 {
     spawn_ssh(work)
         .await
-        .map_err(|_| AppError::Ssh("SSH 任务取消".into()))?
+        .map_err(|_| AppError::ssh("ssh_task_cancelled", json!({})))?
 }
 
 /// Owned, type-erased progress logger that consumes `String`.
@@ -143,7 +144,7 @@ async fn decode_key_with_prompt(
     match russh::keys::decode_secret_key(pem, None) {
         Ok(k) => return Ok(k),
         Err(KeyIsEncrypted) => {}
-        Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+        Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
     }
 
     // 命中缓存 → 直接重试；不命中或失败再走交互
@@ -164,23 +165,13 @@ async fn decode_key_with_prompt(
                         m.remove(key);
                     };
                 }
-                Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+                Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
             }
         }
     }
 
     // 必须有 ctx 才能交互；否则该流程拒绝加密私钥（forward / SFTP 等）
-    let ctx = ctx.ok_or_else(|| {
-        AppError::Ssh(
-            "私钥已加密。\
-             Forward / SFTP 等后台启动流程无法弹出 passphrase 输入框——\
-             请先用同一个凭证（同一 profile）在 SSH 终端中建立一次连接，\
-             输入 passphrase 成功后会缓存到本进程内存，\
-             之后再启动此项即可命中缓存自动通过。\
-             （进程退出 / rssh 重启 → 缓存清空，需要重新缓存）"
-                .into(),
-        )
-    })?;
+    let ctx = ctx.ok_or_else(|| AppError::ssh("ssh_privkey_encrypted_no_ctx", json!({})))?;
 
     // 最多 N 次重试
     for attempt in 0..MAX_PASSPHRASE_RETRIES {
@@ -206,11 +197,11 @@ async fn decode_key_with_prompt(
                     .app
                     .emit(&format!("ssh:data:{}", ctx.tab_id), msg.into_bytes());
             }
-            Err(e) => return Err(AppError::Ssh(format!("私钥解析失败: {e}"))),
+            Err(e) => return Err(AppError::ssh("ssh_privkey_parse_failed", json!({ "err": e.to_string() }))),
         }
     }
 
-    Err(AppError::Ssh("Passphrase 输入错误次数过多".into()))
+    Err(AppError::ssh("ssh_passphrase_too_many", json!({})))
 }
 
 /// 通用终端 prompt：注册 oneshot sender 到指定 waiters map，emit 事件，等用户回应。
@@ -223,7 +214,7 @@ async fn prompt_oneshot(
     tab_id: &str,
     event_prefix: &str,
     payload: serde_json::Value,
-    cancel_msg: &'static str,
+    cancel_code: &'static str,
 ) -> AppResult<String> {
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     {
@@ -232,8 +223,8 @@ async fn prompt_oneshot(
         w.insert(tab_id.to_string(), tx);
     }
     app.emit(&format!("{event_prefix}:{tab_id}"), payload)
-        .map_err(|e| AppError::Other(format!("emit {event_prefix}: {e}")))?;
-    rx.await.map_err(|_| AppError::Ssh(cancel_msg.into()))
+        .map_err(|e| AppError::other("emit_failed", json!({ "channel": event_prefix, "err": e.to_string() })))?;
+    rx.await.map_err(|_| AppError::ssh(cancel_code, json!({})))
 }
 
 /// 向终端弹一次 passphrase 提示，等用户输完回车。
@@ -245,7 +236,7 @@ async fn prompt_passphrase(ctx: &AuthCtx, prompt: &str) -> AppResult<String> {
         &ctx.tab_id,
         "ssh:passphrase_prompt",
         serde_json::json!({ "prompt": prompt }),
-        "用户取消了 passphrase 输入",
+        "ssh_user_cancelled_passphrase",
     )
     .await
 }
@@ -260,7 +251,7 @@ async fn prompt_host_key(ctx: &AuthCtx, banner: &str) -> AppResult<String> {
         &ctx.tab_id,
         "ssh:host_key_prompt",
         serde_json::json!({ "banner": banner }),
-        "用户取消了主机密钥确认",
+        "ssh_user_cancelled_hostkey",
     )
     .await
 }
@@ -521,14 +512,12 @@ fn map_connect_error(
     mismatch: &StdMutex<bool>,
 ) -> AppError {
     if *mismatch.lock().unwrap() {
-        AppError::Ssh(format!(
-            "{}:{} 的主机密钥已变更，连接已拒绝。如确认安全（如服务器重装），\
-             请在终端中重连，按提示输入 'replace' 信任新密钥；\
-             SFTP / 端口转发等后台连接需先在终端走完此流程。",
-            host, port
-        ))
+        AppError::ssh(
+            "ssh_host_key_changed",
+            json!({ "host": host, "port": port }),
+        )
     } else {
-        AppError::Ssh(format!("连接失败: {e}"))
+        AppError::ssh("ssh_connect_failed", json!({ "err": e.to_string() }))
     }
 }
 
@@ -553,10 +542,10 @@ pub async fn ssh_connect(
     .await
     {
         Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch)),
-        Err(_) => Err(AppError::Ssh(format!(
-            "{}:{} 连接超时 ({}s)",
-            host, port, timeout_secs
-        ))),
+        Err(_) => Err(AppError::ssh(
+            "ssh_connect_timeout",
+            json!({ "host": host, "port": port, "secs": timeout_secs }),
+        )),
     }
 }
 
@@ -580,10 +569,10 @@ pub async fn ssh_connect_with_forward(
     {
         Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch))?,
         Err(_) => {
-            return Err(AppError::Ssh(format!(
-                "{}:{} 连接超时 ({}s)",
-                host, port, timeout_secs
-            )))
+            return Err(AppError::ssh(
+                "ssh_connect_timeout",
+                json!({ "host": host, "port": port, "secs": timeout_secs }),
+            ))
         }
     };
     Ok((handle, fwd))
@@ -613,7 +602,7 @@ where
     .await
     {
         Ok(result) => result.map_err(|e| map_connect_error(e, &host, port, &mismatch))?,
-        Err(_) => return Err(AppError::Ssh(format!("{}:{} SSH 握手超时", host, port))),
+        Err(_) => return Err(AppError::ssh("ssh_handshake_timeout", json!({ "host": host, "port": port }))),
     };
     Ok((handle, fwd))
 }
@@ -768,10 +757,19 @@ async fn open_tunnel_with_timeout(
     let fut =
         hop.channel_open_direct_tcpip(target_host.as_str(), target_port as u32, "127.0.0.1", 0);
     match timeout(Duration::from_secs(timeout_secs), fut).await {
-        Ok(r) => r.map_err(|e| AppError::Ssh(format!("堡垒机隧道建立失败 ({label}): {e}"))),
-        Err(_) => Err(AppError::Ssh(format!(
-            "堡垒机隧道超时 ({label} → {target_host}:{target_port}, {timeout_secs}s)。常见原因：bastion 拨不到 target（VPC 不通 / target 防火墙 / target 离线）。",
-        ))),
+        Ok(r) => r.map_err(|e| AppError::ssh(
+            "ssh_bastion_tunnel_failed",
+            json!({ "label": &label, "err": e.to_string() }),
+        )),
+        Err(_) => Err(AppError::ssh(
+            "ssh_bastion_tunnel_timeout",
+            json!({
+                "label": &label,
+                "target_host": target_host,
+                "target_port": target_port,
+                "secs": timeout_secs,
+            }),
+        )),
     }
 }
 
@@ -783,7 +781,7 @@ fn check_auth_result(result: client::AuthResult) -> AppResult<()> {
     if result.success() {
         Ok(())
     } else {
-        Err(AppError::Ssh("认证被拒绝".into()))
+        Err(AppError::ssh("ssh_auth_rejected", json!({})))
     }
 }
 
@@ -805,14 +803,14 @@ pub async fn authenticate(
             let result = handle
                 .authenticate_password(credential.username, pw)
                 .await
-                .map_err(|e| AppError::Ssh(format!("密码认证失败: {e}")))?;
+                .map_err(|e| AppError::ssh("ssh_password_auth_failed", json!({ "err": e.to_string() })))?;
             check_auth_result(result)
         }
         CredentialType::Key => {
             let pem = credential
                 .secret
                 .as_deref()
-                .ok_or_else(|| AppError::Ssh("缺少私钥数据".into()))?;
+                .ok_or_else(|| AppError::ssh("ssh_privkey_missing", json!({})))?;
             let cache_key = if credential.id.is_empty() {
                 None
             } else {
@@ -836,7 +834,7 @@ pub async fn authenticate(
             let result = handle
                 .authenticate_none(credential.username)
                 .await
-                .map_err(|e| AppError::Ssh(format!("认证失败: {e}")))?;
+                .map_err(|e| AppError::ssh("ssh_auth_failed", json!({ "err": e.to_string() })))?;
             check_auth_result(result)
         }
         CredentialType::Interactive => Ok(()),
@@ -858,7 +856,7 @@ async fn pick_rsa_hash(
     let supported = handle
         .best_supported_rsa_hash()
         .await
-        .map_err(|e| AppError::Ssh(format!("RSA 签名算法协商失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_rsa_sigalg_failed", json!({ "err": e.to_string() })))?;
     Ok(supported.flatten())
 }
 
@@ -880,7 +878,7 @@ async fn authenticate_private_key(
     let result = handle
         .authenticate_publickey(username, key_with_alg)
         .await
-        .map_err(|e| AppError::Ssh(format!("密钥认证失败 ({label}): {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_pubkey_auth_failed", json!({ "label": &label, "err": e.to_string() })))?;
     check_auth_result(result)
 }
 
@@ -902,12 +900,12 @@ pub async fn authenticate_with_agent_or_default_keys(
         Ok(()) => return Ok(()),
         Err(e) => e,
     };
-
     match authenticate_with_default_keys(handle, username, ctx).await {
         Ok(()) => Ok(()),
-        Err(key_err) => Err(AppError::Ssh(format!(
-            "SSH agent 认证失败: {agent_err}; 默认私钥认证也失败: {key_err}"
-        ))),
+        // default keys 完全没文件可试 → fallback 没条件走，agent_err 才是真正失败原因
+        // （Agent 凭证类型用户明确依赖 agent，丢掉 agent_err 会得到误导性的"默认密钥不存在"）。
+        Err(key_err) if key_err.code() == "ssh_default_keys_not_found" => Err(agent_err),
+        Err(key_err) => Err(key_err),
     }
 }
 
@@ -921,7 +919,7 @@ pub async fn authenticate_with_agent(
     {
         let agent = AgentClient::connect_env()
             .await
-            .map_err(|e| AppError::Ssh(format!("无法连接 SSH agent (检查 $SSH_AUTH_SOCK): {e}")))?;
+            .map_err(|e| AppError::ssh("ssh_agent_unix_connect_failed", json!({ "err": e.to_string() })))?;
         try_agent_identities(handle, username, agent.dynamic()).await
     }
     #[cfg(windows)]
@@ -935,7 +933,7 @@ pub async fn authenticate_with_agent(
         }
         let agent = AgentClient::connect_pageant()
             .await
-            .map_err(|e| AppError::Ssh(format!("无法连接 SSH agent (Pageant): {e}")))?;
+            .map_err(|e| AppError::ssh("ssh_agent_pageant_failed", json!({ "err": e.to_string() })))?;
         try_agent_identities(handle, username, agent.dynamic()).await
     }
 }
@@ -951,19 +949,17 @@ where
     let identities = agent
         .request_identities()
         .await
-        .map_err(|e| AppError::Ssh(format!("agent 请求 identity 列表失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_agent_list_failed", json!({ "err": e.to_string() })))?;
 
     if identities.is_empty() {
-        return Err(AppError::Ssh(
-            "SSH agent 中没有 identity（先用 `ssh-add` 加 key）".into(),
-        ));
+        return Err(AppError::ssh("ssh_agent_no_identity", json!({})));
     }
 
     let rsa_hash = if identities.iter().any(agent_identity_is_rsa) {
         handle
             .best_supported_rsa_hash()
             .await
-            .map_err(|e| AppError::Ssh(format!("RSA 签名算法协商失败: {e}")))?
+            .map_err(|e| AppError::ssh("ssh_rsa_sigalg_failed", json!({ "err": e.to_string() })))?
             .flatten()
     } else {
         None
@@ -995,12 +991,10 @@ where
         match result {
             Ok(r) if r.success() => return Ok(()),
             Ok(_) => continue,
-            Err(e) => log::warn!("agent identity 签名失败: {e}"),
+            Err(e) => log::warn!("agent identity sign failed: {e}"),
         }
     }
-    Err(AppError::Ssh(
-        "SSH agent 中所有 identity 都被服务器拒绝".into(),
-    ))
+    Err(AppError::ssh("ssh_agent_all_rejected", json!({})))
 }
 
 fn agent_identity_is_rsa(identity: &AgentIdentity) -> bool {
@@ -1023,15 +1017,19 @@ pub async fn authenticate_with_default_keys(
     ctx: Option<&AuthCtx>,
 ) -> AppResult<()> {
     let paths = default_identity_paths();
-    let mut errors = Vec::new();
+    // 只记最后一条 (path, code) — 多个 key 都失败时，第一条与最后一条 code 一般差不多，
+    // 给前端一条标量信息足够；要全量明细去看 stderr/日志。
+    let mut last_path: Option<String> = None;
+    let mut last_code: Option<&'static str> = None;
     let mut found = 0usize;
 
     for path in paths {
         let pem = match std::fs::read_to_string(&path) {
             Ok(pem) => pem,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                errors.push(format!("{}: 读取失败 ({e})", path.display()));
+            Err(_) => {
+                last_path = Some(path.display().to_string());
+                last_code = Some("io_error");
                 continue;
             }
         };
@@ -1042,28 +1040,32 @@ pub async fn authenticate_with_default_keys(
         let key = match decode_key_with_prompt(&pem, Some(&cache_key), &prompt_label, ctx).await {
             Ok(k) => k,
             Err(e) => {
-                errors.push(format!("{}: {e}", path.display()));
+                last_path = Some(path.display().to_string());
+                last_code = Some(e.code());
                 continue;
             }
         };
 
         match authenticate_private_key(handle, username.clone(), key).await {
             Ok(()) => return Ok(()),
-            Err(e) => errors.push(format!("{}: {e}", path.display())),
+            Err(e) => {
+                last_path = Some(path.display().to_string());
+                last_code = Some(e.code());
+            }
         }
     }
 
     if found == 0 {
-        return Err(AppError::Ssh(
-            "未找到默认私钥（~/.ssh/id_rsa、id_ecdsa、id_ecdsa_sk、id_ed25519、id_ed25519_sk）"
-                .into(),
-        ));
+        return Err(AppError::ssh("ssh_default_keys_not_found", json!({})));
     }
 
-    Err(AppError::Ssh(format!(
-        "所有默认私钥都不可用: {}",
-        errors.join("; ")
-    )))
+    Err(AppError::ssh(
+        "ssh_default_keys_unavailable",
+        json!({
+            "path": last_path.unwrap_or_default(),
+            "code": last_code.unwrap_or("unknown"),
+        }),
+    ))
 }
 
 fn default_identity_paths() -> Vec<PathBuf> {
@@ -1098,13 +1100,13 @@ pub async fn authenticate_interactive(
     let mut reply = handle
         .authenticate_keyboard_interactive_start(username, None::<String>)
         .await
-        .map_err(|e| AppError::Ssh(format!("键盘交互启动失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_kbi_start_failed", json!({ "err": e.to_string() })))?;
 
     loop {
         match reply {
             KeyboardInteractiveAuthResponse::Success => return Ok(()),
             KeyboardInteractiveAuthResponse::Failure { .. } => {
-                return Err(AppError::Ssh("认证被拒绝".into()));
+                return Err(AppError::ssh("ssh_auth_rejected", json!({})));
             }
             KeyboardInteractiveAuthResponse::InfoRequest {
                 name,
@@ -1133,12 +1135,12 @@ pub async fn authenticate_interactive(
 
                 let responses = rx
                     .await
-                    .map_err(|_| AppError::Ssh("用户取消了认证".into()))?;
+                    .map_err(|_| AppError::ssh("ssh_user_cancelled_auth", json!({})))?;
 
                 reply = handle
                     .authenticate_keyboard_interactive_respond(responses)
                     .await
-                    .map_err(|e| AppError::Ssh(format!("认证响应失败: {e}")))?;
+                    .map_err(|e| AppError::ssh("ssh_kbi_response_failed", json!({ "err": e.to_string() })))?;
             }
         }
     }
@@ -1164,12 +1166,12 @@ impl SessionHandle {
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
         self.tx
             .send(SessionCmd::Write(data.to_vec()))
-            .map_err(|_| AppError::Ssh("会话已关闭".into()))
+            .map_err(|_| AppError::ssh("ssh_session_closed", json!({})))
     }
     pub fn resize(&self, cols: u32, rows: u32) -> AppResult<()> {
         self.tx
             .send(SessionCmd::Resize { cols, rows })
-            .map_err(|_| AppError::Ssh("会话已关闭".into()))
+            .map_err(|_| AppError::ssh("ssh_session_closed", json!({})))
     }
     pub fn ssh_handle(&self) -> &SshHandle {
         &self.ssh_handle
@@ -1278,17 +1280,17 @@ pub async fn connect(
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| AppError::Ssh(format!("打开 channel 失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_open_channel_failed", json!({ "err": e.to_string() })))?;
 
     channel
         .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
         .await
-        .map_err(|e| AppError::Ssh(format!("PTY 请求失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_pty_request_failed", json!({ "err": e.to_string() })))?;
 
     channel
         .request_shell(false)
         .await
-        .map_err(|e| AppError::Ssh(format!("Shell 请求失败: {e}")))?;
+        .map_err(|e| AppError::ssh("ssh_shell_request_failed", json!({ "err": e.to_string() })))?;
 
     log(format!("Shell ready.\r\n"));
 

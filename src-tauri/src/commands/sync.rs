@@ -1,3 +1,4 @@
+use serde_json::json;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
@@ -49,13 +50,13 @@ pub fn export_config(state: State<'_, AppState>) -> AppResult<String> {
         "groups": groups,
         "skills": skills,
     }))
-    .map_err(|e| AppError::Other(e.to_string()))
+    .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))
 }
 
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> AppResult<()> {
     let data: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
+        serde_json::from_str(&json).map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
     apply_import(&state, &data)
 }
 
@@ -71,17 +72,18 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
     crate::db::forward::clear_all(&state.db)?;
     crate::db::group::clear_all(&state.db)?;
 
-    let mut errors = Vec::new();
+    // 收集每条失败的结构化记录，避免把内层 AppError.to_string() 协议串塞进外层 params。
+    let mut errors: Vec<serde_json::Value> = Vec::new();
 
     if let Some(arr) = data["credentials"].as_array() {
         for item in arr {
             match serde_json::from_value::<crate::models::Credential>(item.clone()) {
                 Ok(c) => {
                     if let Err(e) = upsert_credential(state, &c) {
-                        errors.push(format!("credential {}: {e}", c.name));
+                        errors.push(json!({ "kind": "credential", "name": c.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("credential parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "credential", "code": "parse_failed" })),
             }
         }
     }
@@ -90,10 +92,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Profile>(item.clone()) {
                 Ok(p) => {
                     if let Err(e) = crate::db::profile::insert(&state.db, &p) {
-                        errors.push(format!("profile {}: {e}", p.name));
+                        errors.push(json!({ "kind": "profile", "name": p.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("profile parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "profile", "code": "parse_failed" })),
             }
         }
     }
@@ -102,10 +104,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Forward>(item.clone()) {
                 Ok(f) => {
                     if let Err(e) = crate::db::forward::insert(&state.db, &f) {
-                        errors.push(format!("forward {}: {e}", f.name));
+                        errors.push(json!({ "kind": "forward", "name": f.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("forward parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "forward", "code": "parse_failed" })),
             }
         }
     }
@@ -114,10 +116,10 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
             match serde_json::from_value::<crate::models::Group>(item.clone()) {
                 Ok(g) => {
                     if let Err(e) = crate::db::group::insert(&state.db, &g) {
-                        errors.push(format!("group {}: {e}", g.name));
+                        errors.push(json!({ "kind": "group", "name": g.name, "code": e.code() }));
                     }
                 }
-                Err(e) => errors.push(format!("group parse: {e}")),
+                Err(_) => errors.push(json!({ "kind": "group", "code": "parse_failed" })),
             }
         }
     }
@@ -139,25 +141,33 @@ fn apply_import(state: &State<'_, AppState>, data: &serde_json::Value) -> AppRes
                             content: s.content,
                         };
                         if let Err(e) = crate::db::ai_skill::upsert(&state.db, &user) {
-                            errors.push(format!("skill {}: {e}", user.id));
+                            errors.push(json!({ "kind": "skill", "name": user.id, "code": e.code() }));
                         }
                     }
                     Ok(_) => {} // builtin 跳过
-                    Err(e) => errors.push(format!("skill parse: {e}")),
+                    Err(_) => errors.push(json!({ "kind": "skill", "code": "parse_failed" })),
                 }
             }
         } else {
-            errors.push("skills 字段必须是数组".into());
+            errors.push(json!({ "kind": "skills", "code": "field_not_array" }));
         }
     }
 
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(AppError::Other(format!(
-            "部分导入失败: {}",
-            errors.join("; ")
-        )))
+        // 把第一条失败的标量字段提到顶层，前端 i18n 模板能直接渲染；
+        // 全量数组在结构上保留但不进文案（前端不渲染嵌套结构）。
+        let first = errors.first().cloned().unwrap_or(json!({}));
+        Err(AppError::other(
+            "import_partial_failed",
+            json!({
+                "count": errors.len(),
+                "first_kind": first.get("kind").cloned().unwrap_or(json!("?")),
+                "first_name": first.get("name").cloned().unwrap_or(json!("?")),
+                "first_code": first.get("code").cloned().unwrap_or(json!("?")),
+            }),
+        ))
     }
 }
 
@@ -172,9 +182,9 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
     let token = state
         .secret_store
         .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
     let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
     let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
     let profiles = crate::db::profile::list(&state.db)?;
@@ -199,7 +209,7 @@ pub async fn github_push(state: State<'_, AppState>, password: String) -> AppRes
         "groups": groups,
         "skills": skills,
     }))
-    .map_err(|e| AppError::Other(e.to_string()))?;
+    .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
 
     let encrypted = crate::crypto::encrypt(&json, &password)?;
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
@@ -213,9 +223,9 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
     let token = state
         .secret_store
         .get(&setting_key("github_token"))?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Token".into()))?;
+        .ok_or_else(|| AppError::config("github_token_missing", json!({})))?;
     let repo = crate::db::settings::get(&state.db, "github_repo")?
-        .ok_or_else(|| AppError::Config("未配置 GitHub Repo".into()))?;
+        .ok_or_else(|| AppError::config("github_repo_missing", json!({})))?;
     let branch = crate::db::settings::get(&state.db, "github_branch")?.unwrap_or("main".into());
 
     let sync = GitHubSync::from_settings(&token, &repo, &branch)?;
@@ -223,6 +233,6 @@ pub async fn github_pull(state: State<'_, AppState>, password: String) -> AppRes
     let json = crate::crypto::decrypt(&encrypted, &password)?;
 
     let data: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| AppError::Config(format!("JSON 解析失败: {e}")))?;
+        serde_json::from_str(&json).map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
     apply_import(&state, &data)
 }
