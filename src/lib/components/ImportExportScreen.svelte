@@ -6,12 +6,18 @@
   let importing = $state(false);
   let msg = $state("");
 
+  // 多行错误（如 import_partial_failed 列每条失败）需要更久才看得完。
+  function clearMsgLater() {
+    const ttl = msg.includes("\n") ? 15000 : 4000;
+    setTimeout(() => (msg = ""), ttl);
+  }
+
   async function doExport() {
     try {
       const path = await invoke<string | null>("export_config_to_file");
       msg = path ? `Exported to ${path}` : "";
     } catch (e: any) { msg = `${t("toast.error.export")}: ${errMsg(e)}`; }
-    setTimeout(() => msg = "", 4000);
+    clearMsgLater();
   }
 
   async function doImport() {
@@ -21,7 +27,7 @@
       msg = path ? `Imported from ${path}` : "";
     } catch (e: any) { msg = `${t("toast.error.import")}: ${errMsg(e)}`; }
     finally { importing = false; }
-    setTimeout(() => msg = "", 4000);
+    clearMsgLater();
   }
 
   function gotoSshImport() {
@@ -34,7 +40,7 @@
     <div class="toast">{msg}</div>
   {/if}
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Export Config</div>
       <div class="action-desc">Save all Profiles, Credentials, and Port Forwards to a JSON file</div>
@@ -42,7 +48,7 @@
     <button class="btn btn-accent btn-sm" onclick={doExport}>Export</button>
   </div>
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Import Config</div>
       <div class="action-desc">Load a previously exported JSON file. Merges into local config: matching entries (by id) are overwritten, others stay.</div>
@@ -52,7 +58,7 @@
     </button>
   </div>
 
-  <div class="action-card neu-raised">
+  <div class="action-card surface-raised">
     <div class="action-info">
       <div class="action-title">Import SSH Config</div>
       <div class="action-desc">Read ~/.ssh/config and pick which Host entries to import as Profiles</div>
@@ -76,5 +82,6 @@
     border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 500;
+    white-space: pre-line; /* 让 import_partial_failed 等多行错误的 \n 真正换行 */
   }
 </style>
