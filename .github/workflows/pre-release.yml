@@ -9,7 +9,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   # ── Tests (gate for all build jobs) ──────────────────────────────
@@ -139,17 +139,38 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      # Rename to the same `rssh-<version>-<os>-<arch>.<ext>` convention as
+      # release.yml so users get identical filenames whether they grab a
+      # pre-release or a final release.
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          PREFIX="rssh-${VERSION}-${{ matrix.name }}"
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p dist
+          for f in "${BUNDLE}"/dmg/*.dmg;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.dmg";       done
+          for f in "${BUNDLE}"/deb/*.deb;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.deb";       done
+          for f in "${BUNDLE}"/rpm/*.rpm;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.rpm";       done
+          for f in "${BUNDLE}"/appimage/*.AppImage;   do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.AppImage";  done
+          for f in "${BUNDLE}"/msi/*.msi;             do [ -f "$f" ] && cp "$f" "dist/${PREFIX}.msi";       done
+          for f in "${BUNDLE}"/nsis/*-setup.exe;      do [ -f "$f" ] && cp "$f" "dist/${PREFIX}-setup.exe"; done
+          ls -lh dist/
+
+      # 走 Release Assets（Fastly）而不是 Actions Artifacts（Azure Blob + zip
+      # 包装），下载速度差一个数量级。draft + prerelease 跟 release.yml 一致：
+      # 自动上传到 draft release，由人工 publish。多个 job 共享同一 tag，
+      # softprops 会自动把文件 append 到同一 release（不会创建多个）。
+      - name: Upload to pre-release
+        uses: softprops/action-gh-release@v2
         with:
-          name: rssh-${{ steps.ver.outputs.v }}-${{ matrix.name }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe
+          draft: true
+          prerelease: true
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: "RSSH v${{ steps.ver.outputs.v }}"
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-android:
     needs: test
@@ -223,8 +244,22 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Rename APK
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.v }}"
+          mkdir -p dist
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -type f | head -1)
+          cp "$APK" "dist/rssh-${VERSION}-android-universal.apk"
+          ls -lh dist/
+
+      - name: Upload to pre-release
+        uses: softprops/action-gh-release@v2
         with:
-          name: rssh-${{ steps.ver.outputs.v }}-android
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          draft: true
+          prerelease: true
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: "RSSH v${{ steps.ver.outputs.v }}"
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
