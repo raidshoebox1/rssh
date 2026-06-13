@@ -4,6 +4,37 @@ use super::Db;
 use crate::error::{AppError, AppResult};
 use crate::models::HighlightRule;
 
+fn validate_rule(rule: &HighlightRule) -> AppResult<()> {
+    if rule.keyword.trim().is_empty() {
+        return Err(AppError::config(
+            "highlight_empty_keyword",
+            serde_json::json!({}),
+        ));
+    }
+    if !rule.is_regex && !rule.name.trim().is_empty() {
+        return Err(AppError::config(
+            "highlight_name_for_regex_only",
+            serde_json::json!({}),
+        ));
+    }
+    if rule.name.chars().count() > 100 {
+        return Err(AppError::config(
+            "highlight_name_too_long",
+            serde_json::json!({ "max": 100 }),
+        ));
+    }
+    if rule.color.len() != 7
+        || !rule.color.starts_with('#')
+        || !rule.color[1..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(AppError::config(
+            "highlight_invalid_color",
+            serde_json::json!({}),
+        ));
+    }
+    Ok(())
+}
+
 pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare(
@@ -23,6 +54,7 @@ pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
 }
 
 pub fn insert(db: &Db, rule: &HighlightRule) -> AppResult<()> {
+    validate_rule(rule)?;
     let conn = db.lock()?;
     conn.execute(
         "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -53,6 +85,7 @@ pub fn delete_by_keyword(db: &Db, keyword: &str) -> AppResult<()> {
 /// for a collision against any other row and return a business error rather
 /// than silently producing duplicate rows.
 pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()> {
+    validate_rule(rule)?;
     let conn = db.lock()?;
     if rule.keyword != old_keyword {
         let exists: i64 = conn.query_row(

@@ -22,7 +22,7 @@
 
   function loadFromRule(r: HighlightRule) {
     formKw = r.keyword ?? "";
-    formName = r.name ?? "";
+    formName = r.is_regex ? (r.name ?? "") : "";
     formColor = r.color || "#FF6B6B";
     formEnabled = r.enabled ?? true;
     formIsRegex = r.is_regex ?? false;
@@ -44,6 +44,17 @@
 
   const formError = $derived(validateHighlightRule(finalRule));
 
+  function toggleRegex() {
+    formIsRegex = !formIsRegex;
+    if (!formIsRegex) {
+      formName = "";
+    }
+  }
+
+  function toggleCaseSensitive() {
+    formIsCaseSensitive = !formIsCaseSensitive;
+  }
+
   function handleSave() {
     if (!finalRule.keyword || formError) return;
     onSave(finalRule);
@@ -62,12 +73,12 @@
         onkeydown={handleKeydown} />
       <button type="button" class="btn btn-sm" class:btn-accent={formIsRegex}
         aria-pressed={formIsRegex}
-        onclick={() => formIsRegex = !formIsRegex}>
+        onclick={toggleRegex}>
         {t("highlight.regex")}
       </button>
       <button type="button" class="btn btn-sm" class:btn-accent={formIsCaseSensitive}
         aria-pressed={formIsCaseSensitive}
-        onclick={() => formIsCaseSensitive = !formIsCaseSensitive}>
+        onclick={toggleCaseSensitive}>
         {t("highlight.case_sensitive")}
       </button>
     </div>

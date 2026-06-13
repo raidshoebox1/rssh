@@ -286,32 +286,30 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     if version < 18 {
         // Keyword highlighting now supports regex and case-sensitive toggles.
         // Default 0 preserves existing rule behavior: plain text, case-insensitive.
-        let _ = conn.execute_batch(
+        conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 0;",
-        );
-        let _ = conn.execute_batch(
+        )?;
+        conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN is_case_sensitive INTEGER NOT NULL DEFAULT 0;",
-        );
+        )?;
     }
 
     if version < 19 {
         // Regex highlight rules support a human-readable name for easier list management.
-        let _ = conn.execute_batch(
+        conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';",
-        );
+        )?;
         let ipv4_pattern = r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b";
-        let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
-                params![ipv4_pattern],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
+            params![ipv4_pattern],
+            |r| r.get(0),
+        )?;
         if exists == 0 {
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![ipv4_pattern, "IPv4", "#D86BFF", 1, 1, 0],
-            );
+            )?;
         }
     }
 
