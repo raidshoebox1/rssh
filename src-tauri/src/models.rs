@@ -176,6 +176,8 @@ pub struct HighlightRule {
     pub keyword: String,
     pub color: String,
     pub enabled: bool,
+    pub is_regex: bool,
+    pub is_case_sensitive: bool,
 }
 
 // --- Snippet ---

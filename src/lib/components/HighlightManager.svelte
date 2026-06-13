@@ -5,6 +5,7 @@
   import * as app from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
+  import { validateHighlightRule } from "../terminal/highlight.ts";
 
   let items = $state<HighlightRule[]>([]);
   let adding = $state(false);
@@ -15,6 +16,17 @@
   let formKw = $state("");
   let formColor = $state("#FF6B6B");
   let formEnabled = $state(true);
+  let formIsRegex = $state(false);
+  let formIsCaseSensitive = $state(false);
+
+  const formRule = $derived<HighlightRule>({
+    keyword: formKw.trim(),
+    color: formColor,
+    enabled: formEnabled,
+    is_regex: formIsRegex,
+    is_case_sensitive: formIsCaseSensitive,
+  });
+  const formError = $derived(validateHighlightRule(formRule));
 
   onMount(refresh);
 
@@ -33,6 +45,8 @@
     formKw = "";
     formColor = "#FF6B6B";
     formEnabled = true;
+    formIsRegex = false;
+    formIsCaseSensitive = false;
   }
 
   function startEdit(h: HighlightRule) {
@@ -41,6 +55,8 @@
     formKw = h.keyword;
     formColor = h.color;
     formEnabled = h.enabled;
+    formIsRegex = h.is_regex;
+    formIsCaseSensitive = h.is_case_sensitive;
   }
 
   function cancelForm() {
@@ -48,11 +64,20 @@
     editKw = null;
   }
 
+  function showFormValidationError() {
+    if (!formError) return;
+    if (formError.kind === "zero_width") {
+      toast.error(t("error.highlight_regex_zero_width"));
+    } else {
+      toast.error(t("error.highlight_invalid_regex", { err: formError.message }));
+    }
+  }
+
   async function saveNew() {
-    const kw = formKw.trim();
-    if (!kw) return;
+    if (!formRule.keyword) return;
+    if (formError) { showFormValidationError(); return; }
     try {
-      await invoke("add_highlight", { rule: { keyword: kw, color: formColor, enabled: formEnabled } });
+      await invoke("add_highlight", { rule: formRule });
       adding = false;
       await refresh();
     } catch (e: any) { toast.error(`${t("toast.error.add")}: ${errMsg(e)}`); }
@@ -60,12 +85,12 @@
 
   async function saveEdit() {
     if (editKw === null) return;
-    const kw = formKw.trim();
-    if (!kw) return;
+    if (!formRule.keyword) return;
+    if (formError) { showFormValidationError(); return; }
     try {
       await invoke("update_highlight", {
         oldKeyword: editKw,
-        rule: { keyword: kw, color: formColor, enabled: formEnabled },
+        rule: formRule,
       });
       editKw = null;
       await refresh();
@@ -109,8 +134,27 @@
           <span class="color-hex">{formColor}</span>
         </div>
       </label>
+      <div class="form-row">
+        <label class="switch-label">
+          <input type="checkbox" bind:checked={formIsRegex} />
+          <span>{t("highlight.regex")}</span>
+        </label>
+        <label class="switch-label">
+          <input type="checkbox" bind:checked={formIsCaseSensitive} />
+          <span>{t("highlight.case_sensitive")}</span>
+        </label>
+      </div>
+      {#if formError}
+        <div class="form-error">
+          {#if formError.kind === "zero_width"}
+            {t("error.highlight_regex_zero_width")}
+          {:else}
+            {t("error.highlight_invalid_regex", { err: formError.message })}
+          {/if}
+        </div>
+      {/if}
       <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim()}>{t("common.save")}</button>
+        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim() || !!formError}>{t("common.save")}</button>
         <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
       </div>
     </div>
@@ -124,18 +168,37 @@
           <input type="text" bind:value={formKw}
             onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
         </label>
-        <label>
-          <span class="label-text">{t("common.color")}</span>
-          <div class="color-row">
-            <input type="color" bind:value={formColor} />
-            <span class="color-hex">{formColor}</span>
-          </div>
-        </label>
-        <div class="form-actions">
-          <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim()}>{t("common.save")}</button>
-          <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
+      <label>
+        <span class="label-text">{t("common.color")}</span>
+        <div class="color-row">
+          <input type="color" bind:value={formColor} />
+          <span class="color-hex">{formColor}</span>
         </div>
+      </label>
+      <div class="form-row">
+        <label class="switch-label">
+          <input type="checkbox" bind:checked={formIsRegex} />
+          <span>{t("highlight.regex")}</span>
+        </label>
+        <label class="switch-label">
+          <input type="checkbox" bind:checked={formIsCaseSensitive} />
+          <span>{t("highlight.case_sensitive")}</span>
+        </label>
       </div>
+      {#if formError}
+        <div class="form-error">
+          {#if formError.kind === "zero_width"}
+            {t("error.highlight_regex_zero_width")}
+          {:else}
+            {t("error.highlight_invalid_regex", { err: formError.message })}
+          {/if}
+        </div>
+      {/if}
+      <div class="form-actions">
+        <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim() || !!formError}>{t("common.save")}</button>
+        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
+      </div>
+    </div>
     {:else}
       <div class="card item-row">
         <div class="item-info">
@@ -143,6 +206,12 @@
           <div>
             <div class="item-name">{h.keyword}</div>
             <div class="item-sub">{h.color}</div>
+            {#if h.is_regex || h.is_case_sensitive}
+              <div class="item-tags">
+                {#if h.is_regex}<span class="tag">RegEx</span>{/if}
+                {#if h.is_case_sensitive}<span class="tag">Aa</span>{/if}
+              </div>
+            {/if}
           </div>
         </div>
         <div class="item-actions">
@@ -194,6 +263,22 @@
   }
   .color-hex { font-size: 12px; font-family: monospace; color: var(--text-dim); }
   .form-actions { display: flex; gap: 10px; margin-top: 4px; }
+
+  .form-row { display: flex; gap: 16px; align-items: center; margin-top: 4px; }
+  .switch-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .switch-label input { margin: 0; }
+  .form-error {
+    font-size: 12px; color: var(--error, #ff6b6b);
+    background: rgba(255, 107, 107, 0.08);
+    padding: 6px 8px; border-radius: 4px;
+  }
+
+  .item-tags { display: flex; gap: 6px; margin-top: 4px; }
+  .tag {
+    font-size: 10px; font-weight: 600; color: var(--text-dim);
+    border: 1px solid var(--divider); border-radius: 3px;
+    padding: 1px 4px; font-family: monospace;
+  }
 
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
 </style>

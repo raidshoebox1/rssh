@@ -72,7 +72,7 @@ export interface SerialProfile {
   input_mode: string; output_mode: string; login_script: string;
 }
 export interface Snippet { name: string; command: string; }
-export interface HighlightRule { keyword: string; color: string; enabled: boolean; }
+export interface HighlightRule { keyword: string; color: string; enabled: boolean; is_regex: boolean; is_case_sensitive: boolean; }
 export interface RemoteEntry {
     name: string;
     is_dir: boolean;

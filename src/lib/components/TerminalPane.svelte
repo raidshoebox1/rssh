@@ -19,32 +19,18 @@
     import {extractBlocksText} from "../terminal/block-content.ts";
     import {renderBlocksToBlob} from "../terminal/block-to-image.ts";
     import {inputNewline, normalizeIncoming, bytesToHex, parseHexInput, parseLoginScript, remapEditingKeys, normalizeOutgoing, type LoginStep} from "../terminal/serial-transforms.ts";
+    import {compileHighlightRules, highlightPlain, type CompiledHighlightRule} from "../terminal/highlight.ts";
     import {t} from "../i18n/index.svelte.ts";
     import {ACTIONS, matchBinding, type ActionId} from "../keyboard/keymap.ts";
     import * as keymap from "../stores/keymap.svelte.ts";
     import BlockContextMenu, {type MenuItem} from "./BlockContextMenu.svelte";
 
-    const RST = "\x1b[0m";
-
-    /** Hex color → ANSI 24-bit true color escape. */
-    function ansiColor(hex: string): string {
-        const h = hex.replace("#", "");
-        if (h.length !== 6) return "";
-        const r = parseInt(h.slice(0, 2), 16);
-        const g = parseInt(h.slice(2, 4), 16);
-        const b = parseInt(h.slice(4, 6), 16);
-        return `\x1b[38;2;${r};${g};${b}m`;
-    }
-
     let hlRules = $state<HighlightRule[]>([]);
-    let hlRegex: RegExp | null = null;
+    let hlCompiled = $state<CompiledHighlightRule[]>([]);
     let hlEverLoaded = false;
 
-    function buildHighlightRegex(rules: HighlightRule[]) {
-        const enabled = rules.filter(r => r.enabled && r.keyword);
-        if (!enabled.length) { hlRegex = null; return; }
-        const escaped = enabled.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-        hlRegex = new RegExp(escaped.join("|"), "gi");
+    function buildCompiledRules(rules: HighlightRule[]) {
+        hlCompiled = compileHighlightRules(rules);
     }
 
     // React to HighlightManager edits. The store's `highlightsRevision`
@@ -59,39 +45,29 @@
         void (async () => {
             try {
                 hlRules = await app.loadHighlights();
-                buildHighlightRegex(hlRules);
+                buildCompiledRules(hlRules);
                 paintTick++;
             } catch { /* DB read failure is non-fatal — old rules stay */ }
         })();
     });
 
-    function hlReplace(plain: string): string {
-        if (!hlRegex) return plain;
-        return plain.replace(hlRegex, (match) => {
-            const rule = hlRules.find(r => r.enabled && r.keyword.toLowerCase() === match.toLowerCase());
-            if (!rule) return match;
-            const code = ansiColor(rule.color);
-            return code + match + RST;
-        });
-    }
-
     function applyHighlights(text: string): string {
-        if (!hlRegex || !hlRules.length) return text;
+        if (!hlCompiled.length) return text;
         // DCS (\x1bP, sixel) / APC (\x1b_) 数据段不能被高亮替换碰，会撕碎图像帧。
         if (text.indexOf('\x1bP') >= 0 || text.indexOf('\x1b_') >= 0) return text;
         const escRe = /\x1b(?:\[[0-9;?]*[A-Za-z@`]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[^\[\]])/g;
         let out = '', pos = 0, m;
         while ((m = escRe.exec(text)) !== null) {
-            if (m.index > pos) out += hlReplace(text.slice(pos, m.index));
+            if (m.index > pos) out += highlightPlain(text.slice(pos, m.index), hlCompiled);
             out += m[0];
             pos = escRe.lastIndex;
         }
         const rest = text.slice(pos);
         const esc = rest.indexOf('\x1b');
         if (esc < 0) {
-            out += hlReplace(rest);
+            out += highlightPlain(rest, hlCompiled);
         } else {
-            if (esc > 0) out += hlReplace(rest.slice(0, esc));
+            if (esc > 0) out += highlightPlain(rest.slice(0, esc), hlCompiled);
             out += rest.slice(esc);
         }
         return out;
@@ -691,10 +667,10 @@
                 feedLoginScript(raw);
                 if (serialOpts.outputMode === "hex") { terminal.write(bytesToHex(raw)); return; }
                 const text = serialNormalizeOut(decoder.decode(raw, { stream: true }));
-                terminal.write(hlRegex ? applyHighlights(text) : text);
+                terminal.write(hlCompiled.length ? applyHighlights(text) : text);
                 return;
             }
-            if (hlRegex) {
+            if (hlCompiled.length) {
                 terminal.write(applyHighlights(decoder.decode(raw, { stream: true })));
             } else {
                 terminal.write(raw);
@@ -1208,7 +1184,7 @@
         // Load highlight rules + the command-block-bar toggle. Awaiting
         // the toggle before `connectAndWire` runs avoids a first-frame
         // flash of the bar when the user has it disabled.
-        try { hlRules = await app.loadHighlights(); buildHighlightRegex(hlRules); } catch {}
+        try { hlRules = await app.loadHighlights(); buildCompiledRules(hlRules); } catch {}
         hlEverLoaded = true;
         await app.loadCommandBlockBar();
 

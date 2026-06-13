@@ -6,12 +6,16 @@ use crate::models::HighlightRule;
 
 pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
     let conn = db.lock()?;
-    let mut stmt = conn.prepare("SELECT keyword, color, enabled FROM highlights")?;
+    let mut stmt = conn.prepare(
+        "SELECT keyword, color, enabled, is_regex, is_case_sensitive FROM highlights",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(HighlightRule {
             keyword: row.get(0)?,
             color: row.get(1)?,
             enabled: row.get::<_, bool>(2)?,
+            is_regex: row.get::<_, bool>(3)?,
+            is_case_sensitive: row.get::<_, bool>(4)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -20,8 +24,14 @@ pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
 pub fn insert(db: &Db, rule: &HighlightRule) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute(
-        "INSERT INTO highlights (keyword, color, enabled) VALUES (?1, ?2, ?3)",
-        params![rule.keyword, rule.color, rule.enabled],
+        "INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            rule.keyword,
+            rule.color,
+            rule.enabled,
+            rule.is_regex,
+            rule.is_case_sensitive
+        ],
     )?;
     Ok(())
 }
@@ -56,8 +66,15 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
         }
     }
     let affected = conn.execute(
-        "UPDATE highlights SET keyword = ?1, color = ?2, enabled = ?3 WHERE keyword = ?4",
-        params![rule.keyword, rule.color, rule.enabled, old_keyword],
+        "UPDATE highlights SET keyword = ?1, color = ?2, enabled = ?3, is_regex = ?4, is_case_sensitive = ?5 WHERE keyword = ?6",
+        params![
+            rule.keyword,
+            rule.color,
+            rule.enabled,
+            rule.is_regex,
+            rule.is_case_sensitive,
+            old_keyword
+        ],
     )?;
     if affected == 0 {
         // No row matched old_keyword — UI would otherwise show a fake success.
@@ -93,10 +110,10 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
     conn.execute("DELETE FROM highlights", [])?;
     conn.execute_batch(
         "
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('ERROR', '#FF6B6B', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('WARN', '#FFD060', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('INFO', '#6EDAA0', 1);
-        INSERT INTO highlights (keyword, color, enabled) VALUES ('DEBUG', '#40C8E0', 1);
+        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('ERROR', '#FF6B6B', 1, 0, 0);
+        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('WARN', '#FFD060', 1, 0, 0);
+        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('INFO', '#6EDAA0', 1, 0, 0);
+        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('DEBUG', '#40C8E0', 1, 0, 0);
         ",
     )?;
     Ok(())
