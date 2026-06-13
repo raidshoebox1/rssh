@@ -55,21 +55,31 @@
 </script>
 
 <div class="card inline-form">
-  {#if formIsRegex}
-    <label>
-      <span class="label-text">{t("highlight.name")}</span>
-      <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
-        onkeydown={handleKeydown} />
-    </label>
-  {/if}
-
-  <label>
+  <div class="field">
     <span class="label-text">{t("highlight.keyword")}</span>
-    <input type="text" bind:value={formKw} placeholder={t("highlight.keyword_placeholder")}
-      onkeydown={handleKeydown} />
+    <div class="keyword-row">
+      <input type="text" bind:value={formKw} placeholder={t("highlight.keyword_placeholder")}
+        onkeydown={handleKeydown} />
+      <button type="button" class="btn btn-sm" class:btn-accent={formIsRegex}
+        aria-pressed={formIsRegex}
+        onclick={() => formIsRegex = !formIsRegex}>
+        {t("highlight.regex")}
+      </button>
+      <button type="button" class="btn btn-sm" class:btn-accent={formIsCaseSensitive}
+        aria-pressed={formIsCaseSensitive}
+        onclick={() => formIsCaseSensitive = !formIsCaseSensitive}>
+        {t("highlight.case_sensitive")}
+      </button>
+    </div>
+  </div>
+
+  <label class="field" class:disabled={!formIsRegex}>
+    <span class="label-text">{t("highlight.name")}</span>
+    <input type="text" bind:value={formName} placeholder={t("highlight.name_placeholder")}
+      disabled={!formIsRegex} onkeydown={handleKeydown} />
   </label>
 
-  <div class="option-row">
+  <div class="color-actions-row">
     <label class="color-picker">
       <span class="label-text">{t("common.color")}</span>
       <div class="color-row">
@@ -77,17 +87,6 @@
         <span class="color-hex">{formColor}</span>
       </div>
     </label>
-
-    <div class="toggles">
-      <label class="toggle-btn" class:active={formIsRegex}>
-        <input type="checkbox" bind:checked={formIsRegex} />
-        <span>{t("highlight.regex")}</span>
-      </label>
-      <label class="toggle-btn" class:active={formIsCaseSensitive}>
-        <input type="checkbox" bind:checked={formIsCaseSensitive} />
-        <span>{t("highlight.case_sensitive")}</span>
-      </label>
-    </div>
 
     <div class="form-actions">
       <button class="btn btn-accent btn-sm" onclick={handleSave} disabled={!formKw.trim() || !!formError}>
@@ -110,19 +109,37 @@
 
 <style>
   .inline-form {
-    display: flex; flex-direction: column; gap: 10px;
+    display: flex; flex-direction: column; gap: 12px;
     padding: 16px; margin-bottom: 12px;
   }
-  .inline-form label { display: flex; flex-direction: column; gap: 4px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
   .label-text { font-size: 12px; color: var(--text-sub); }
-  .inline-form input[type="text"] {
-    width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
+
+  .keyword-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .keyword-row input[type="text"] {
+    flex: 1; min-width: 160px;
+    font: inherit; font-size: 13px;
+  }
+  .keyword-row .btn {
+    white-space: nowrap; flex-shrink: 0;
   }
 
-  .option-row {
-    display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+  .field.disabled .label-text { color: var(--text-dim); }
+  .field input:disabled {
+    opacity: 0.55;
+    background: color-mix(in srgb, var(--surface) 70%, var(--divider));
+    cursor: not-allowed;
   }
-  .color-picker { flex-shrink: 0; }
+  .inline-form input[type="text"] {
+    width: 100%; box-sizing: border-box;
+  }
+
+  .color-actions-row {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .color-picker { display: flex; flex-direction: column; gap: 4px; }
   .color-row { display: flex; align-items: center; gap: 10px; }
   .color-row input[type="color"] {
     width: 48px; height: 32px; padding: 2px;
@@ -130,27 +147,6 @@
     cursor: pointer; box-shadow: none;
   }
   .color-hex { font-size: 12px; font-family: monospace; color: var(--text-dim); }
-
-  .toggles { display: flex; align-items: center; gap: 8px; flex: 1; }
-  .toggle-btn {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 5px 12px; font-size: 12px; font-weight: 600;
-    border-radius: var(--radius-sm, 4px);
-    background: var(--surface); color: var(--text-sub);
-    border: 1.5px solid var(--divider);
-    cursor: pointer; user-select: none;
-    transition: all 0.15s;
-  }
-  .toggle-btn input {
-    position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0;
-  }
-  .toggle-btn.active {
-    background: var(--accent); border-color: var(--accent); color: var(--white);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
-  }
-  .toggle-btn:not(.active):hover {
-    border-color: var(--accent); color: var(--text);
-  }
 
   .form-actions {
     display: flex; gap: 10px; margin-left: auto; align-items: center;
