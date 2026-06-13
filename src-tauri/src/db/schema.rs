@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
 
 pub fn migrate(conn: &Connection) -> AppResult<()> {
     let version: u32 = conn
@@ -291,6 +291,13 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         );
         let _ = conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN is_case_sensitive INTEGER NOT NULL DEFAULT 0;",
+        );
+    }
+
+    if version < 19 {
+        // 正则高亮规则支持人类可读的名称，便于在列表中管理。
+        let _ = conn.execute_batch(
+            "ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';",
         );
     }
 

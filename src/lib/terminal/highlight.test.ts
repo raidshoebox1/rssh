@@ -13,6 +13,7 @@ function rule(
 ): HighlightRule {
     return {
         keyword,
+        name: "",
         color: "#FF6B6B",
         enabled: true,
         is_regex: false,

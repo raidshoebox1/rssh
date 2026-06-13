@@ -7,15 +7,16 @@ use crate::models::HighlightRule;
 pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
     let conn = db.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT keyword, color, enabled, is_regex, is_case_sensitive FROM highlights",
+        "SELECT keyword, name, color, enabled, is_regex, is_case_sensitive FROM highlights",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(HighlightRule {
             keyword: row.get(0)?,
-            color: row.get(1)?,
-            enabled: row.get::<_, bool>(2)?,
-            is_regex: row.get::<_, bool>(3)?,
-            is_case_sensitive: row.get::<_, bool>(4)?,
+            name: row.get(1)?,
+            color: row.get(2)?,
+            enabled: row.get::<_, bool>(3)?,
+            is_regex: row.get::<_, bool>(4)?,
+            is_case_sensitive: row.get::<_, bool>(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -24,9 +25,10 @@ pub fn list(db: &Db) -> AppResult<Vec<HighlightRule>> {
 pub fn insert(db: &Db, rule: &HighlightRule) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute(
-        "INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             rule.keyword,
+            rule.name,
             rule.color,
             rule.enabled,
             rule.is_regex,
@@ -66,9 +68,10 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
         }
     }
     let affected = conn.execute(
-        "UPDATE highlights SET keyword = ?1, color = ?2, enabled = ?3, is_regex = ?4, is_case_sensitive = ?5 WHERE keyword = ?6",
+        "UPDATE highlights SET keyword = ?1, name = ?2, color = ?3, enabled = ?4, is_regex = ?5, is_case_sensitive = ?6 WHERE keyword = ?7",
         params![
             rule.keyword,
+            rule.name,
             rule.color,
             rule.enabled,
             rule.is_regex,
@@ -110,10 +113,10 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
     conn.execute("DELETE FROM highlights", [])?;
     conn.execute_batch(
         "
-        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('ERROR', '#FF6B6B', 1, 0, 0);
-        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('WARN', '#FFD060', 1, 0, 0);
-        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('INFO', '#6EDAA0', 1, 0, 0);
-        INSERT INTO highlights (keyword, color, enabled, is_regex, is_case_sensitive) VALUES ('DEBUG', '#40C8E0', 1, 0, 0);
+        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('ERROR', '', '#FF6B6B', 1, 0, 0);
+        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('WARN', '', '#FFD060', 1, 0, 0);
+        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('INFO', '', '#6EDAA0', 1, 0, 0);
+        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('DEBUG', '', '#40C8E0', 1, 0, 0);
         ",
     )?;
     Ok(())

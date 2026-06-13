@@ -776,6 +776,8 @@ const zh: Messages = {
   "highlight.reset_defaults": "恢复默认",
   "highlight.keyword": "关键字",
   "highlight.keyword_placeholder": "ERROR / WARN / 自定义文本或正则",
+  "highlight.name": "名称",
+  "highlight.name_placeholder": "如：日期 / IP / 错误级别",
   "highlight.regex": "正则表达式",
   "highlight.case_sensitive": "区分大小写",
   // 录制

@@ -774,6 +774,8 @@ const en = {
   "highlight.reset_defaults": "Reset to Defaults",
   "highlight.keyword": "Keyword",
   "highlight.keyword_placeholder": "ERROR / WARN / literal or regex pattern",
+  "highlight.name": "Name",
+  "highlight.name_placeholder": "e.g. Date / IP / Error level",
   "highlight.regex": "Regex",
   "highlight.case_sensitive": "Case sensitive",
   // Recording

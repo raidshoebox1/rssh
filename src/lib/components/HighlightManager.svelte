@@ -5,28 +5,22 @@
   import * as app from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { t, errMsg } from "../i18n/index.svelte.ts";
-  import { validateHighlightRule } from "../terminal/highlight.ts";
+  import HighlightRuleForm from "./HighlightRuleForm.svelte";
+
+  const EMPTY_RULE: HighlightRule = {
+    keyword: "",
+    name: "",
+    color: "#FF6B6B",
+    enabled: true,
+    is_regex: false,
+    is_case_sensitive: false,
+  };
 
   let items = $state<HighlightRule[]>([]);
   let adding = $state(false);
+  let addKey = $state(0);
   // Edit identity = keyword as currently stored on the backend (rename uses old → new).
   let editKw = $state<string | null>(null);
-
-  // Form fields
-  let formKw = $state("");
-  let formColor = $state("#FF6B6B");
-  let formEnabled = $state(true);
-  let formIsRegex = $state(false);
-  let formIsCaseSensitive = $state(false);
-
-  const formRule = $derived<HighlightRule>({
-    keyword: formKw.trim(),
-    color: formColor,
-    enabled: formEnabled,
-    is_regex: formIsRegex,
-    is_case_sensitive: formIsCaseSensitive,
-  });
-  const formError = $derived(validateHighlightRule(formRule));
 
   onMount(refresh);
 
@@ -41,22 +35,13 @@
 
   function startAdd() {
     adding = true;
+    addKey += 1;
     editKw = null;
-    formKw = "";
-    formColor = "#FF6B6B";
-    formEnabled = true;
-    formIsRegex = false;
-    formIsCaseSensitive = false;
   }
 
   function startEdit(h: HighlightRule) {
     adding = false;
     editKw = h.keyword;
-    formKw = h.keyword;
-    formColor = h.color;
-    formEnabled = h.enabled;
-    formIsRegex = h.is_regex;
-    formIsCaseSensitive = h.is_case_sensitive;
   }
 
   function cancelForm() {
@@ -64,33 +49,20 @@
     editKw = null;
   }
 
-  function showFormValidationError() {
-    if (!formError) return;
-    if (formError.kind === "zero_width") {
-      toast.error(t("error.highlight_regex_zero_width"));
-    } else {
-      toast.error(t("error.highlight_invalid_regex", { err: formError.message }));
-    }
-  }
-
-  async function saveNew() {
-    if (!formRule.keyword) return;
-    if (formError) { showFormValidationError(); return; }
+  async function saveNew(rule: HighlightRule) {
     try {
-      await invoke("add_highlight", { rule: formRule });
+      await invoke("add_highlight", { rule });
       adding = false;
       await refresh();
     } catch (e: any) { toast.error(`${t("toast.error.add")}: ${errMsg(e)}`); }
   }
 
-  async function saveEdit() {
+  async function saveEdit(rule: HighlightRule) {
     if (editKw === null) return;
-    if (!formRule.keyword) return;
-    if (formError) { showFormValidationError(); return; }
     try {
       await invoke("update_highlight", {
         oldKeyword: editKw,
-        rule: formRule,
+        rule,
       });
       editKw = null;
       await refresh();
@@ -112,6 +84,10 @@
       await refresh();
     } catch (e: any) { toast.error(`${t("toast.error.reset")}: ${errMsg(e)}`); }
   }
+
+  function displayTitle(h: HighlightRule): string {
+    return h.is_regex && h.name ? h.name : h.keyword;
+  }
 </script>
 
 <div class="page">
@@ -121,91 +97,23 @@
   </div>
 
   {#if adding}
-    <div class="card inline-form">
-      <label>
-        <span class="label-text">{t("highlight.keyword")}</span>
-        <input type="text" bind:value={formKw} placeholder={t("highlight.keyword_placeholder")}
-          onkeydown={(e) => { if (e.key === "Enter") saveNew(); }} />
-      </label>
-      <label>
-        <span class="label-text">{t("common.color")}</span>
-        <div class="color-row">
-          <input type="color" bind:value={formColor} />
-          <span class="color-hex">{formColor}</span>
-        </div>
-      </label>
-      <div class="form-row">
-        <label class="switch-label">
-          <input type="checkbox" bind:checked={formIsRegex} />
-          <span>{t("highlight.regex")}</span>
-        </label>
-        <label class="switch-label">
-          <input type="checkbox" bind:checked={formIsCaseSensitive} />
-          <span>{t("highlight.case_sensitive")}</span>
-        </label>
-      </div>
-      {#if formError}
-        <div class="form-error">
-          {#if formError.kind === "zero_width"}
-            {t("error.highlight_regex_zero_width")}
-          {:else}
-            {t("error.highlight_invalid_regex", { err: formError.message })}
-          {/if}
-        </div>
-      {/if}
-      <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveNew} disabled={!formKw.trim() || !!formError}>{t("common.save")}</button>
-        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
-      </div>
-    </div>
+    {#key addKey}
+      <HighlightRuleForm rule={EMPTY_RULE} onSave={saveNew} onCancel={cancelForm} />
+    {/key}
   {/if}
 
   {#each items as h (h.keyword)}
     {#if editKw === h.keyword}
-      <div class="card inline-form">
-        <label>
-          <span class="label-text">{t("highlight.keyword")}</span>
-          <input type="text" bind:value={formKw}
-            onkeydown={(e) => { if (e.key === "Enter") saveEdit(); }} />
-        </label>
-      <label>
-        <span class="label-text">{t("common.color")}</span>
-        <div class="color-row">
-          <input type="color" bind:value={formColor} />
-          <span class="color-hex">{formColor}</span>
-        </div>
-      </label>
-      <div class="form-row">
-        <label class="switch-label">
-          <input type="checkbox" bind:checked={formIsRegex} />
-          <span>{t("highlight.regex")}</span>
-        </label>
-        <label class="switch-label">
-          <input type="checkbox" bind:checked={formIsCaseSensitive} />
-          <span>{t("highlight.case_sensitive")}</span>
-        </label>
-      </div>
-      {#if formError}
-        <div class="form-error">
-          {#if formError.kind === "zero_width"}
-            {t("error.highlight_regex_zero_width")}
-          {:else}
-            {t("error.highlight_invalid_regex", { err: formError.message })}
-          {/if}
-        </div>
-      {/if}
-      <div class="form-actions">
-        <button class="btn btn-accent btn-sm" onclick={saveEdit} disabled={!formKw.trim() || !!formError}>{t("common.save")}</button>
-        <button class="btn btn-sm" onclick={cancelForm}>{t("common.cancel")}</button>
-      </div>
-    </div>
+      <HighlightRuleForm rule={h} onSave={saveEdit} onCancel={cancelForm} />
     {:else}
       <div class="card item-row">
         <div class="item-info">
           <span class="color-swatch" style="background: {h.color}"></span>
-          <div>
-            <div class="item-name">{h.keyword}</div>
-            <div class="item-sub">{h.color}</div>
+          <div class="item-text">
+            <div class="item-name" title={h.keyword}>{displayTitle(h)}</div>
+            {#if !(h.is_regex && h.name)}
+              <div class="item-sub">{h.color}</div>
+            {/if}
             {#if h.is_regex || h.is_case_sensitive}
               <div class="item-tags">
                 {#if h.is_regex}<span class="tag">RegEx</span>{/if}
@@ -238,47 +146,22 @@
     gap: 12px;
   }
   .item-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-  .item-name { font-weight: 600; font-size: 14px; font-family: monospace; }
+  .item-text { min-width: 0; }
+  .item-name {
+    font-weight: 600; font-size: 14px; font-family: monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .item-sub { font-size: 12px; color: var(--text-sub); font-family: monospace; }
   .item-actions { display: flex; gap: 10px; flex-shrink: 0; }
   .color-swatch {
     width: 20px; height: 20px; border-radius: 4px; flex-shrink: 0;
     border: 1px solid var(--divider);
   }
-
-  .inline-form {
-    display: flex; flex-direction: column; gap: 8px;
-    padding: 14px; margin-bottom: 10px;
-  }
-  .inline-form label { display: flex; flex-direction: column; gap: 4px; }
-  .label-text { font-size: 13px; color: var(--text); }
-  .inline-form input[type="text"] {
-    width: 100%; box-sizing: border-box; font: inherit; font-size: 13px;
-  }
-  .color-row { display: flex; align-items: center; gap: 10px; }
-  .color-row input[type="color"] {
-    width: 48px; height: 32px; padding: 2px;
-    border: 1px solid var(--divider); border-radius: 4px;
-    cursor: pointer; box-shadow: none;
-  }
-  .color-hex { font-size: 12px; font-family: monospace; color: var(--text-dim); }
-  .form-actions { display: flex; gap: 10px; margin-top: 4px; }
-
-  .form-row { display: flex; gap: 16px; align-items: center; margin-top: 4px; }
-  .switch-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
-  .switch-label input { margin: 0; }
-  .form-error {
-    font-size: 12px; color: var(--error, #ff6b6b);
-    background: rgba(255, 107, 107, 0.08);
-    padding: 6px 8px; border-radius: 4px;
-  }
-
   .item-tags { display: flex; gap: 6px; margin-top: 4px; }
   .tag {
     font-size: 10px; font-weight: 600; color: var(--text-dim);
     border: 1px solid var(--divider); border-radius: 3px;
     padding: 1px 4px; font-family: monospace;
   }
-
   .empty { text-align: center; color: var(--text-dim); padding: 32px; }
 </style>
