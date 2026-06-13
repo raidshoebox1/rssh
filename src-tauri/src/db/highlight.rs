@@ -112,12 +112,13 @@ pub fn reset_defaults(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM highlights", [])?;
     conn.execute_batch(
-        "
+        r#"
         INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('ERROR', '', '#FF6B6B', 1, 0, 0);
         INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('WARN', '', '#FFD060', 1, 0, 0);
         INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('INFO', '', '#6EDAA0', 1, 0, 0);
         INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('DEBUG', '', '#40C8E0', 1, 0, 0);
-        ",
+        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b', 'IPv4', '#D86BFF', 1, 1, 0);
+        "#,
     )?;
     Ok(())
 }

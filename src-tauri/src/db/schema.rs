@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
@@ -299,6 +299,21 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
         let _ = conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';",
         );
+        // 新增默认 IPv4 正则高亮规则（按 keyword 判断，避免重复）。
+        let ipv4_pattern = r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b";
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM highlights WHERE keyword = ?1",
+                params![ipv4_pattern],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if exists == 0 {
+            let _ = conn.execute(
+                "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![ipv4_pattern, "IPv4", "#D86BFF", 1, 1, 0],
+            );
+        }
     }
 
     if version < SCHEMA_VERSION {
