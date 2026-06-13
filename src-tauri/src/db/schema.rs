@@ -284,8 +284,8 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     if version < 18 {
-        // 关键字高亮支持正则表达式与区分大小写开关。
-        // 默认值 0 保证旧规则行为不变：普通文本、大小写不敏感。
+        // Keyword highlighting now supports regex and case-sensitive toggles.
+        // Default 0 preserves existing rule behavior: plain text, case-insensitive.
         let _ = conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 0;",
         );
@@ -295,11 +295,10 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     if version < 19 {
-        // 正则高亮规则支持人类可读的名称，便于在列表中管理。
+        // Regex highlight rules support a human-readable name for easier list management.
         let _ = conn.execute_batch(
             "ALTER TABLE highlights ADD COLUMN name TEXT NOT NULL DEFAULT '';",
         );
-        // 新增默认 IPv4 正则高亮规则（按 keyword 判断，避免重复）。
         let ipv4_pattern = r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b";
         let exists: i64 = conn
             .query_row(

@@ -27,8 +27,8 @@ export type HighlightValidationError =
     | { kind: "zero_width" };
 
 /**
- * 校验单条高亮规则（仅正则模式需要校验）。
- * 返回 null 表示合法；否则返回错误类型，由 UI 映射到 i18n 文案。
+ * Validate a single highlight rule. Only regex mode needs syntax checking.
+ * Returns null when valid; otherwise returns an error kind for the UI to map to i18n.
  */
 export function validateHighlightRule(rule: HighlightRule): HighlightValidationError | null {
     if (!rule.is_regex || !rule.keyword) return null;
@@ -44,7 +44,7 @@ export function validateHighlightRule(rule: HighlightRule): HighlightValidationE
     return null;
 }
 
-/** 预编译高亮规则，生成可在终端输出中复用的 RegExp。非法规则会被标记为 regex=null。 */
+/** Pre-compile highlight rules into reusable RegExp objects. Invalid rules are marked as regex=null. */
 export function compileHighlightRules(rules: HighlightRule[]): CompiledHighlightRule[] {
     return rules.map((rule) => {
         if (!rule.enabled || !rule.keyword) {
@@ -72,8 +72,9 @@ interface Match {
 }
 
 /**
- * 对一段“纯文本”（不含 ANSI 转义序列）应用高亮规则。
- * 规则按列表顺序处理；同一位置多条规则匹配时保留第一条。
+ * Apply highlight rules to a plain-text segment (no ANSI escape sequences).
+ * Rules are processed in list order; when multiple rules match the same start
+ * position, the first one wins and overlapping matches are skipped.
  */
 export function highlightPlain(plain: string, compiled: CompiledHighlightRule[]): string {
     const enabled = compiled.filter((c) => c.enabled && c.keyword && c.regex);
@@ -90,7 +91,7 @@ export function highlightPlain(plain: string, compiled: CompiledHighlightRule[])
             const start = m.index;
             const end = start + m[0].length;
             if (end === start) {
-                // 零宽匹配：前进一格避免死循环（防御性保护）
+                // Zero-width match: advance one char to avoid an infinite loop (defensive).
                 re.lastIndex = start + 1;
                 continue;
             }
