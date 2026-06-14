@@ -1,4 +1,4 @@
-//! `rssh config <export|import|set|push|pull>` —— config backup & GitHub sync.
+//! `rssh config <export|import|set|push|pull|...>` —— config backup & remote sync.
 //!
 //! Both `import` and `pull` go through `merge_import` (additive upsert by
 //! identity, never destructive), sharing `rssh_lib::sync::config` with the GUI.
@@ -22,6 +22,12 @@ pub enum ConfigCmd {
     Push,
     /// Pull config from GitHub
     Pull,
+    /// Set WebDAV sync settings
+    WebdavSet,
+    /// Push config to WebDAV
+    WebdavPush,
+    /// Pull config from WebDAV
+    WebdavPull,
 }
 
 pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
@@ -31,6 +37,9 @@ pub fn cmd_config(conn: &CliCtx, action: ConfigCmd) -> AppResult<()> {
         ConfigCmd::Set => config_set(conn),
         ConfigCmd::Push => config_push(conn),
         ConfigCmd::Pull => config_pull(conn),
+        ConfigCmd::WebdavSet => config_webdav_set(conn),
+        ConfigCmd::WebdavPush => config_webdav_push(conn),
+        ConfigCmd::WebdavPull => config_webdav_pull(conn),
     }
 }
 
@@ -164,5 +173,103 @@ fn config_pull(conn: &CliCtx) -> AppResult<()> {
     // pull: additive merge (no destructive clear) — same as the GUI.
     import_config_json(conn, &json)?;
     println!("Pulled from GitHub.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV sync
+// ---------------------------------------------------------------------------
+
+fn read_webdav_settings(conn: &CliCtx) -> AppResult<(String, String, String)> {
+    let url = rssh_lib::db::settings::get(conn, "webdav_url")?
+        .unwrap_or_else(|| die("WebDAV URL not set. Run: rssh config webdav-set"));
+    let username = rssh_lib::db::settings::get(conn, "webdav_username")?.unwrap_or_default();
+    let password = conn
+        .secret_store()
+        .get(&setting_key("webdav_password"))?
+        .unwrap_or_else(|| die("WebDAV password not set. Run: rssh config webdav-set"));
+    Ok((url, username, password))
+}
+
+fn config_webdav_set(conn: &CliCtx) -> AppResult<()> {
+    let cur_url = rssh_lib::db::settings::get(conn, "webdav_url")?.unwrap_or_default();
+    let cur_username = rssh_lib::db::settings::get(conn, "webdav_username")?.unwrap_or_default();
+    let cur_password = conn
+        .secret_store()
+        .get(&setting_key("webdav_password"))?
+        .unwrap_or_default();
+
+    let url = prompt_default("WebDAV URL (https://...)", &cur_url);
+    let username = prompt_default("Username", &cur_username);
+    let password = prompt_secret_default("Password", &cur_password);
+
+    // Validate early so the user doesn't have to run a network command to
+    // discover a typo in the URL.
+    rssh_lib::sync::webdav::WebDavSync::from_settings(&url, &username, &password)?;
+
+    rssh_lib::db::settings::set(conn, "webdav_url", &url)?;
+    rssh_lib::db::settings::set(conn, "webdav_username", &username)?;
+    if password.is_empty() {
+        conn.secret_store().delete(&setting_key("webdav_password"))?;
+    } else {
+        conn.secret_store()
+            .set(&setting_key("webdav_password"), &password)?;
+    }
+    println!(
+        "WebDAV settings saved (password in {}).",
+        conn.secret_store().backend_name()
+    );
+    Ok(())
+}
+
+fn config_webdav_push(conn: &CliCtx) -> AppResult<()> {
+    let (url, username, password) = read_webdav_settings(conn)?;
+
+    let ss: &dyn SecretStore = conn.secret_store().as_ref();
+    let prefs = rssh_lib::sync::config::read_sync_prefs(conn)?;
+    let payload = rssh_lib::sync::config::build_payload(
+        conn,
+        ss,
+        &conn.data_dir,
+        &rssh_lib::sync::config::ExportMode::RemotePush(prefs),
+    )?;
+    let mut json_data = serde_json::to_string_pretty(&payload)
+        .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));
+
+    let pw = read_password("Encryption password: ");
+    let pw2 = read_password("Confirm password: ");
+    if pw != pw2 {
+        return Err(AppError::config(
+            "cli_password_mismatch",
+            serde_json::json!({}),
+        ));
+    }
+    let encrypted = rssh_lib::crypto::encrypt(&json_data, &pw)?;
+    json_data.clear();
+
+    let sync = rssh_lib::sync::webdav::WebDavSync::from_settings(&url, &username, &password)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
+    rt.block_on(sync.push(&encrypted))?;
+    println!("Pushed to WebDAV.");
+    Ok(())
+}
+
+fn config_webdav_pull(conn: &CliCtx) -> AppResult<()> {
+    let (url, username, password) = read_webdav_settings(conn)?;
+
+    let sync = rssh_lib::sync::webdav::WebDavSync::from_settings(&url, &username, &password)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| die(format!("Tokio runtime: {e}")));
+    let encrypted = rt.block_on(sync.pull())?;
+
+    let pw = read_password("Decryption password: ");
+    let json = rssh_lib::crypto::decrypt(&encrypted, &pw)?;
+    import_config_json(conn, &json)?;
+    println!("Pulled from WebDAV.");
     Ok(())
 }

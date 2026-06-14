@@ -54,7 +54,7 @@ enum Cmd {
     Edit { kind: String, name: String },
     /// Remove a profile, credential, or forward
     Rm { kind: String, name: String },
-    /// Configuration: export, import, GitHub sync
+    /// Configuration: export, import, remote sync (GitHub / WebDAV)
     Config {
         #[command(subcommand)]
         action: ConfigCmd,

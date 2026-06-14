@@ -12,6 +12,8 @@
     let githubSyncing = $state(false);
     let githubMsg = $state("");
     let githubSaveMsg = $state("");
+    let githubSaveIsError = $state(false);
+    let ghSaveTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 
     /* ── WebDAV source state ─────────────────────────────────────────────── */
     let webdavEnabled = $state(false);
@@ -21,6 +23,8 @@
     let webdavSyncing = $state(false);
     let webdavMsg = $state("");
     let webdavSaveMsg = $state("");
+    let webdavSaveIsError = $state(false);
+    let wdSaveTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 
     /* ── Shared sync content toggles ──────────────────────────────────────── */
     const SYNC_ITEMS: { key: string; label: MessageKey }[] = [
@@ -85,7 +89,43 @@
                 await invoke("set_setting", { key: "sync_profile_group_ids", value: "" });
             }
         }
+
+        return () => {
+            if (ghSaveTimer) clearTimeout(ghSaveTimer);
+            if (wdSaveTimer) clearTimeout(wdSaveTimer);
+        };
     });
+
+    function startGhSaveTimer() {
+        if (ghSaveTimer) clearTimeout(ghSaveTimer);
+        ghSaveTimer = setTimeout(() => { githubSaveMsg = ""; ghSaveTimer = null; }, 2000);
+    }
+
+    function startWdSaveTimer() {
+        if (wdSaveTimer) clearTimeout(wdSaveTimer);
+        wdSaveTimer = setTimeout(() => { webdavSaveMsg = ""; wdSaveTimer = null; }, 2000);
+    }
+
+    function isHttpUrl(url: string): boolean {
+        try { return new URL(url).protocol === "http:"; } catch { return false; }
+    }
+
+    function validateWebdavUrl(url: string): MessageKey | null {
+        let u: URL;
+        try { u = new URL(url); } catch {
+            return "error.webdav_url_invalid";
+        }
+        if (u.protocol !== "http:" && u.protocol !== "https:") {
+            return "error.webdav_url_invalid";
+        }
+        if (u.username || u.password) {
+            return "error.webdav_url_userinfo_forbidden";
+        }
+        if (u.search || u.hash) {
+            return "error.webdav_url_query_fragment_forbidden";
+        }
+        return null;
+    }
 
     async function saveGithubSettings() {
         await invoke("set_setting", { key: "github_token", value: githubToken });
@@ -93,16 +133,25 @@
         await invoke("set_setting", { key: "github_branch", value: githubBranch });
         await invoke("set_setting", { key: "sync_github_enabled", value: githubEnabled ? "1" : "0" });
         githubSaveMsg = t("github.saved");
-        setTimeout(() => githubSaveMsg = "", 2000);
+        githubSaveIsError = false;
+        startGhSaveTimer();
     }
 
     async function saveWebdavSettings() {
+        const err = validateWebdavUrl(webdavUrl);
+        if (err) {
+            webdavSaveMsg = t(err);
+            webdavSaveIsError = true;
+            startWdSaveTimer();
+            return;
+        }
         await invoke("set_setting", { key: "webdav_url", value: webdavUrl });
         await invoke("set_setting", { key: "webdav_username", value: webdavUsername });
         await invoke("set_setting", { key: "webdav_password", value: webdavPassword });
         await invoke("set_setting", { key: "sync_webdav_enabled", value: webdavEnabled ? "1" : "0" });
         webdavSaveMsg = t("webdav.saved");
-        setTimeout(() => webdavSaveMsg = "", 2000);
+        webdavSaveIsError = false;
+        startWdSaveTimer();
     }
 
     async function setFlag(key: string, val: boolean) {
@@ -135,6 +184,14 @@
         return gh || wd;
     }
 
+    function closePwDialog() {
+        showPwDialog = false;
+        pw1 = "";
+        pw2 = "";
+        pwError = "";
+        globalMsg = "";
+    }
+
     function askPassword(mode: "push" | "pull") {
         if (!canPushPull()) {
             globalMsg = t("sync.no_source");
@@ -157,52 +214,49 @@
             pwError = t("sync.password_mismatch");
             return;
         }
+
         showPwDialog = false;
-
         const password = pw1;
-        const tasks: Promise<void>[] = [];
+        pw1 = "";
+        pw2 = "";
 
+        /* GitHub */
         if (githubEnabled && githubToken && githubRepo) {
             githubSyncing = true;
             githubMsg = t(pwMode === "push" ? "sync.status.pushing" : "sync.status.pulling");
-            tasks.push(
-                (pwMode === "push"
-                    ? invoke("github_push", { password })
-                    : invoke("github_pull", { password })
-                )
-                    .then(() => {
-                        githubMsg = t(pwMode === "push" ? "github.push_ok" : "github.pull_ok");
-                    })
-                    .catch((e: any) => {
-                        githubMsg = t("github.failed", { error: errMsg(e) });
-                    })
-                    .finally(() => {
-                        githubSyncing = false;
-                    })
-            );
+            try {
+                if (pwMode === "push") {
+                    await invoke("github_push", { password });
+                    githubMsg = t("github.push_ok");
+                } else {
+                    await invoke("github_pull", { password });
+                    githubMsg = t("github.pull_ok");
+                }
+            } catch (e: any) {
+                githubMsg = t("github.failed", { error: errMsg(e) });
+            } finally {
+                githubSyncing = false;
+            }
         }
 
+        /* WebDAV */
         if (webdavEnabled && webdavUrl && webdavPassword) {
             webdavSyncing = true;
             webdavMsg = t(pwMode === "push" ? "sync.status.pushing" : "sync.status.pulling");
-            tasks.push(
-                (pwMode === "push"
-                    ? invoke("webdav_push", { password })
-                    : invoke("webdav_pull", { password })
-                )
-                    .then(() => {
-                        webdavMsg = t(pwMode === "push" ? "webdav.push_ok" : "webdav.pull_ok");
-                    })
-                    .catch((e: any) => {
-                        webdavMsg = t("webdav.failed", { error: errMsg(e) });
-                    })
-                    .finally(() => {
-                        webdavSyncing = false;
-                    })
-            );
+            try {
+                if (pwMode === "push") {
+                    await invoke("webdav_push", { password });
+                    webdavMsg = t("webdav.push_ok");
+                } else {
+                    await invoke("webdav_pull", { password });
+                    webdavMsg = t("webdav.pull_ok");
+                }
+            } catch (e: any) {
+                webdavMsg = t("webdav.failed", { error: errMsg(e) });
+            } finally {
+                webdavSyncing = false;
+            }
         }
-
-        await Promise.all(tasks);
     }
 </script>
 
@@ -225,19 +279,19 @@
             </p>
             <div class="field">
                 <label for="gh-token">{t("github.token")}</label>
-                <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
+                <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx" autocomplete="off"/>
             </div>
             <div class="field">
                 <label for="gh-repo">{t("github.repo")}</label>
-                <input id="gh-repo" type="text" bind:value={githubRepo} placeholder="user/rssh-config"/>
+                <input id="gh-repo" type="text" bind:value={githubRepo} placeholder="user/rssh-config" autocomplete="off"/>
             </div>
             <div class="field">
                 <label for="gh-branch">{t("github.branch")}</label>
-                <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
+                <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main" autocomplete="off"/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveGithubSettings}>⛰ {t("common.save")}</button>
             {#if githubSaveMsg}
-                <div class="msg">{githubSaveMsg}</div>
+                <div class="msg" class:error={githubSaveIsError}>{githubSaveMsg}</div>
             {/if}
         {/if}
     </div>
@@ -255,19 +309,22 @@
         {#if webdavEnabled}
             <div class="field">
                 <label for="wd-url">{t("webdav.url")}</label>
-                <input id="wd-url" type="text" bind:value={webdavUrl} placeholder={t("webdav.url_placeholder")}/>
+                <input id="wd-url" type="text" bind:value={webdavUrl} placeholder={t("webdav.url_placeholder")} autocomplete="off"/>
+                {#if isHttpUrl(webdavUrl)}
+                    <div class="hint warning">{t("sync.webdav_http_warning")}</div>
+                {/if}
             </div>
             <div class="field">
                 <label for="wd-username">{t("webdav.username")}</label>
-                <input id="wd-username" type="text" bind:value={webdavUsername}/>
+                <input id="wd-username" type="text" bind:value={webdavUsername} autocomplete="off"/>
             </div>
             <div class="field">
                 <label for="wd-password">{t("webdav.password")}</label>
-                <input id="wd-password" type="password" bind:value={webdavPassword}/>
+                <input id="wd-password" type="password" bind:value={webdavPassword} autocomplete="new-password"/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>⛰ {t("common.save")}</button>
             {#if webdavSaveMsg}
-                <div class="msg">{webdavSaveMsg}</div>
+                <div class="msg" class:error={webdavSaveIsError}>{webdavSaveMsg}</div>
             {/if}
         {/if}
     </div>
@@ -330,21 +387,23 @@
 
 <!-- Password dialog -->
 {#if showPwDialog}
-    <div class="dialog-backdrop" onclick={() => showPwDialog = false} role="presentation">
+    <div class="dialog-backdrop" onclick={closePwDialog} onkeydown={(e) => e.key === "Escape" && closePwDialog()} role="presentation" tabindex="-1">
         <div class="dialog surface-raised" onclick={(e) => e.stopPropagation()}
              role="dialog" aria-modal="true" aria-labelledby="sync-pw-title">
             <h3 id="sync-pw-title">{pwMode === "push" ? t("sync.set_password") : t("sync.enter_password")}</h3>
-            <input type="password" bind:value={pw1} placeholder={t("sync.password")}
+            <input type="password" bind:value={pw1} placeholder={t("sync.password")} autocomplete="new-password"
+                   autofocus aria-describedby={pwError ? "pw-error" : undefined}
                    onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {#if pwMode === "push"}
-                <input type="password" bind:value={pw2} placeholder={t("sync.confirm_password")}
+                <input type="password" bind:value={pw2} placeholder={t("sync.confirm_password")} autocomplete="new-password"
+                       aria-describedby={pwError ? "pw-error" : undefined}
                        onkeydown={(e) => { if (e.key === "Enter") confirmPassword(); }}/>
             {/if}
             {#if pwError}
-                <div class="pw-error">{pwError}</div>
+                <div id="pw-error" class="pw-error" role="alert">{pwError}</div>
             {/if}
             <div class="btn-row">
-                <button class="btn btn-sm" onclick={() => showPwDialog = false}>{t("common.cancel")}</button>
+                <button class="btn btn-sm" onclick={closePwDialog}>{t("common.cancel")}</button>
                 <button class="btn btn-accent btn-sm" onclick={confirmPassword}>{t("common.confirm")}</button>
             </div>
         </div>
@@ -400,6 +459,14 @@
     .field input {
         width: 100%;
         box-sizing: border-box;
+    }
+
+    .hint {
+        font-size: 11px;
+        line-height: 1.5;
+    }
+    .hint.warning {
+        color: var(--warning, var(--error));
     }
 
     .save-btn {
@@ -497,6 +564,7 @@
         border-radius: var(--radius);
         padding: calc(24px * var(--density));
         min-width: 300px;
+        max-width: calc(100vw - 32px);
         display: flex;
         flex-direction: column;
         gap: 12px;
@@ -510,5 +578,20 @@
     .pw-error {
         font-size: 12px;
         color: var(--error);
+    }
+
+    @media (max-width: 480px) {
+        .page {
+            padding: 16px;
+        }
+        .card {
+            padding: 14px;
+        }
+        .btn-row {
+            flex-direction: column;
+        }
+        .card-divider {
+            margin: 2px -14px;
+        }
     }
 </style>

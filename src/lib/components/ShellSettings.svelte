@@ -254,7 +254,7 @@
   .page { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 
   /* 卡片：复用全局 .card.surface-raised，本地只加 padding + 内布局，
-     跟 GitHubSyncScreen / AiSettings 同款。 */
+     跟 SyncScreen / AiSettings 同款。 */
   .shell-card,
   .cmd-block-card,
   .mouse-card {
@@ -264,7 +264,7 @@
     gap: 14px;
   }
 
-  /* 提示文本：跟 GitHubSyncScreen .pat-hint 同一档（11px / text-dim / 行高 1.5）。 */
+  /* 提示文本：跟 SyncScreen .pat-hint 同一档（11px / text-dim / 行高 1.5）。 */
   .shell-hint {
     font-size: 11px;
     color: var(--text-dim);

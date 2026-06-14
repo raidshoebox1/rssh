@@ -185,7 +185,7 @@ src-tauri/                    # backend (Rust)
     commands/                 # Tauri command handlers
     terminal/                 # PTY + asciicast recorder
     crypto.rs                 # config encryption
-    sync/                     # GitHub sync
+    sync/                     # Remote sync (GitHub + WebDAV)
   src/bin/rssh.rs             # CLI binary (behind `cli` feature flag)
   gen/android/                # Android build files
 ```

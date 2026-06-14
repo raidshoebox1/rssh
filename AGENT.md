@@ -132,6 +132,7 @@ rg '#\[cfg\(' src-tauri/src/commands   # 看 command 层平台分支
 | 密钥抽象 | `src-tauri/src/secret/`，trait + keyring/db 两实现 | 见 R5 |
 | 错误类型 | `src-tauri/src/error.rs` `AppError` | thiserror 派生 |
 | GitHub 同步 | `src-tauri/src/sync/github.rs` | `commands/sync.rs` 入口 |
+| WebDAV 同步 | `src-tauri/src/sync/webdav.rs` | `commands/sync.rs` + CLI `config webdav-*` |
 
 ### Tab ID 形态
 
@@ -193,9 +194,9 @@ rg 'try_launch_gui|RSSH_APP' src-tauri/src/bin
 rg 'db::|secret_store' src-tauri/src/bin/rssh.rs
 ```
 
-### P6. `save_to_remote` 决定 secret 是否上 GitHub
+### P6. `save_to_remote` 决定 secret 是否上传到远程同步目标
 
-Credential 上的开关，`config push` / `commands/sync.rs` 据此过滤。改同步逻辑必须看两处。
+Credential 上的开关，`config push` / `config webdav-push` / `commands/sync.rs` 据此过滤。改同步逻辑必须看两处。
 
 ### P7. `isMobile` 是 const，不响应窗口缩放
 

@@ -534,7 +534,7 @@
 
 <div class="page">
     <div class="section-label">{t("ai.settings.section.provider")}</div>
-    <!-- Provider & Model + BYOK 警告合在一个 .card.surface-raised（跟 .danger-card / GitHubSyncScreen 同款）。
+    <!-- Provider & Model + BYOK 警告合在一个 .card.surface-raised（跟 .danger-card / SyncScreen 同款）。
          .warn 留在卡片顶部作"PAT hint"的等价位置，但保留自身警告样式（border-left + tint bg）。 -->
     <div class="card surface-raised provider-card">
         <div class="warn">
@@ -589,7 +589,7 @@
     </div>
 
     <div class="section-label">{t("ai.settings.danger.section")}</div>
-    <!-- 危险模式 + 8 个 per-tool 自动批准合在一个 .card.surface-raised（参考 GitHubSyncScreen）。
+    <!-- 危险模式 + 8 个 per-tool 自动批准合在一个 .card.surface-raised（参考 SyncScreen）。
          视觉上是一组语义关联的配置，不再拆成两个浮空卡片。 -->
     <div class="card surface-raised danger-card" class:on={dangerMode}>
         <div class="danger-head">
@@ -979,7 +979,7 @@
     }
 
     /* Provider / Danger 卡片：复用全局 .card.surface-raised 提供 bg + 阴影 + 圆角，
-       本地只加 padding + 内布局，跟 GitHubSyncScreen 同款。 */
+       本地只加 padding + 内布局，跟 SyncScreen 同款。 */
     .provider-card,
     .danger-card,
     .list-card {
@@ -1069,7 +1069,7 @@
         cursor: not-allowed;
     }
 
-    /* Danger confirm dialog —— 仿 GitHubSyncScreen 的模态结构 */
+    /* Danger confirm dialog —— 仿 SyncScreen 的模态结构 */
     .dialog-backdrop {
         position: fixed;
         inset: 0;
