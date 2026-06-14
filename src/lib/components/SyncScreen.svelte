@@ -216,6 +216,11 @@
         </div>
 
         {#if githubEnabled}
+            <p class="pat-hint">
+                {t("github.pat_hint1")}<br/>
+                {t("github.pat_hint2")}<br/>
+                {t("github.pat_hint3")}
+            </p>
             <div class="field">
                 <label for="gh-token">{t("github.token")}</label>
                 <input id="gh-token" type="password" bind:value={githubToken} placeholder="ghp_xxxx"/>
@@ -229,9 +234,6 @@
                 <input id="gh-branch" type="text" bind:value={githubBranch} placeholder="main"/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveGithubSettings}>⛰ {t("common.save")}</button>
-            {#if githubMsg}
-                <div class="msg">{githubMsg}</div>
-            {/if}
         {/if}
     </div>
 
@@ -259,9 +261,6 @@
                 <input id="wd-password" type="password" bind:value={webdavPassword}/>
             </div>
             <button class="btn btn-accent btn-sm save-btn" onclick={saveWebdavSettings}>⛰ {t("common.save")}</button>
-            {#if webdavMsg}
-                <div class="msg">{webdavMsg}</div>
-            {/if}
         {/if}
     </div>
 
@@ -315,6 +314,9 @@
         {#if globalMsg}
             <div class="msg error">{globalMsg}</div>
         {/if}
+        {#if githubMsg || webdavMsg}
+            <div class="msg">{[githubMsg, webdavMsg].filter(Boolean).join("\n")}</div>
+        {/if}
     </div>
 </div>
 
@@ -367,6 +369,13 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
+    }
+
+    .pat-hint {
+        margin: 0;
+        font-size: 11px;
+        color: var(--text-dim);
+        line-height: 1.5;
     }
 
     .field {
