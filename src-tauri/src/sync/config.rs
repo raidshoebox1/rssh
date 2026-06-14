@@ -705,24 +705,31 @@ mod tests {
             &db,
             &HighlightRule {
                 keyword: "MYKEY".into(),
+                name: "My Key".into(),
                 color: "#000".into(),
                 enabled: true,
+                is_regex: true,
+                is_case_sensitive: false,
             },
         )
         .unwrap();
         let data = json!({
             "version": 1,
             "highlights": [
-                {"keyword": "MYKEY", "color": "#f00", "enabled": false},
+                {"keyword": "MYKEY", "name": "Renamed", "color": "#f00", "enabled": false, "is_regex": true, "is_case_sensitive": true},
                 {"keyword": "OTHER", "color": "#0f0", "enabled": true},
             ],
         });
         merge_import(&db, &ss, dir.path(), &data).unwrap();
         let hs = highlight::list(&db).unwrap();
         let mk = hs.iter().find(|h| h.keyword == "MYKEY").unwrap();
-        assert_eq!(mk.color, "#f00", "keyword overwritten");
+        assert_eq!(mk.color, "#f00", "color overwritten");
+        assert_eq!(mk.name, "Renamed", "name overwritten");
+        assert!(mk.is_regex, "is_regex overwritten");
+        assert!(mk.is_case_sensitive, "is_case_sensitive overwritten");
         assert!(!mk.enabled);
-        assert!(hs.iter().any(|h| h.keyword == "OTHER"), "new keyword added");
+        let other = hs.iter().find(|h| h.keyword == "OTHER").unwrap();
+        assert_eq!(other.color, "#0f0", "new keyword added");
         assert_eq!(
             hs.iter().filter(|h| h.keyword == "MYKEY").count(),
             1,
@@ -954,8 +961,11 @@ mod tests {
             &db,
             &HighlightRule {
                 keyword: "KEEP".into(),
+                name: "".into(),
                 color: "#1".into(),
                 enabled: true,
+                is_regex: false,
+                is_case_sensitive: false,
             },
         )
         .unwrap();

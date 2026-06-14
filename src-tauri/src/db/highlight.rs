@@ -114,19 +114,33 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
 }
 
 /// Upsert addressed by keyword — the sync identity. The autoincrement `id` is
-/// local-only and never synced (it would collide across devices). Updates
-/// color/enabled when the keyword exists, inserts otherwise. Used by
-/// merge_import; additive, never deletes.
+/// local-only and never synced (it would collide across devices). Updates all
+/// columns when the keyword exists, inserts otherwise. Used by merge_import;
+/// additive, never deletes.
 pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
     let conn = db.lock()?;
     let affected = conn.execute(
-        "UPDATE highlights SET color = ?2, enabled = ?3 WHERE keyword = ?1",
-        params![rule.keyword, rule.color, rule.enabled],
+        "UPDATE highlights SET name = ?2, color = ?3, enabled = ?4, is_regex = ?5, is_case_sensitive = ?6 WHERE keyword = ?1",
+        params![
+            rule.keyword,
+            rule.name,
+            rule.color,
+            rule.enabled,
+            rule.is_regex,
+            rule.is_case_sensitive
+        ],
     )?;
     if affected == 0 {
         conn.execute(
-            "INSERT INTO highlights (keyword, color, enabled) VALUES (?1, ?2, ?3)",
-            params![rule.keyword, rule.color, rule.enabled],
+            "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                rule.keyword,
+                rule.name,
+                rule.color,
+                rule.enabled,
+                rule.is_regex,
+                rule.is_case_sensitive
+            ],
         )?;
     }
     Ok(())
