@@ -74,6 +74,7 @@ tempfile = { version = "3", optional = true }
 tree-sitter = "0.26.9"
 tree-sitter-bash = "0.25.1"
 fontdb = "0.23.0"
+url = "2.5.8"
 
 # Raw termios access for the serial `xany` (IXANY) flag — the serialport crate
 # doesn't expose it. Unix only; Windows has no DCB equivalent exposed here.
@@ -108,6 +109,7 @@ custom-protocol = ["tauri/custom-protocol"]
 # 测试专用依赖：让 `cargo test`（默认 feature 集）可以无条件用 tempfile，
 # 不必带 `--features cli`。release build 不受影响。
 [dev-dependencies]
+mockito = "1.7.2"
 tempfile = "3"
 
 [[bin]]
