@@ -113,6 +113,8 @@
     <div class="form-error">
       {#if formError.kind === "zero_width"}
         {t("error.highlight_regex_zero_width")}
+      {:else if formError.kind === "name_too_long"}
+        {t("error.highlight_name_too_long", { max: 100 })}
       {:else}
         {t("error.highlight_invalid_regex", { err: formError.message })}
       {/if}

@@ -118,6 +118,7 @@ pub fn update(db: &Db, old_keyword: &str, rule: &HighlightRule) -> AppResult<()>
 /// columns when the keyword exists, inserts otherwise. Used by merge_import;
 /// additive, never deletes.
 pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
+    validate_rule(rule)?;
     let conn = db.lock()?;
     let affected = conn.execute(
         "UPDATE highlights SET name = ?2, color = ?3, enabled = ?4, is_regex = ?5, is_case_sensitive = ?6 WHERE keyword = ?1",
@@ -149,14 +150,25 @@ pub fn upsert_by_keyword(db: &Db, rule: &HighlightRule) -> AppResult<()> {
 pub fn reset_defaults(db: &Db) -> AppResult<()> {
     let conn = db.lock()?;
     conn.execute("DELETE FROM highlights", [])?;
-    conn.execute_batch(
-        r#"
-        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('ERROR', '', '#FF6B6B', 1, 0, 0);
-        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('WARN', '', '#FFD060', 1, 0, 0);
-        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('INFO', '', '#6EDAA0', 1, 0, 0);
-        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('DEBUG', '', '#40C8E0', 1, 0, 0);
-        INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES ('\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b', 'IPv4', '#D86BFF', 1, 1, 0);
-        "#,
-    )?;
+    const DEFAULTS: [(&str, &str, &str, bool, bool, bool); 5] = [
+        ("ERROR", "", "#FF6B6B", true, false, false),
+        ("WARN", "", "#FFD060", true, false, false),
+        ("INFO", "", "#6EDAA0", true, false, false),
+        ("DEBUG", "", "#40C8E0", true, false, false),
+        (
+            r"\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b",
+            "IPv4",
+            "#D86BFF",
+            true,
+            true,
+            false,
+        ),
+    ];
+    for (keyword, name, color, enabled, is_regex, is_case_sensitive) in &DEFAULTS {
+        conn.execute(
+            "INSERT INTO highlights (keyword, name, color, enabled, is_regex, is_case_sensitive) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![keyword, name, color, enabled, is_regex, is_case_sensitive],
+        )?;
+    }
     Ok(())
 }

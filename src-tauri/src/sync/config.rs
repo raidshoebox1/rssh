@@ -738,6 +738,30 @@ mod tests {
     }
 
     #[test]
+    fn merge_highlights_old_3_field_payload() {
+        let (db, ss, dir) = fixture();
+        // Pre-sync clients only send keyword/color/enabled. New fields must
+        // default safely thanks to #[serde(default)] on HighlightRule.
+        let data = json!({
+            "version": 1,
+            "highlights": [
+                {"keyword": "OLD", "color": "#00f", "enabled": true},
+            ],
+        });
+        merge_import(&db, &ss, dir.path(), &data).unwrap();
+        let hs = highlight::list(&db).unwrap();
+        let h = hs.iter().find(|h| h.keyword == "OLD").unwrap();
+        assert_eq!(h.color, "#00f");
+        assert_eq!(h.name, "");
+        assert!(!h.is_regex, "missing is_regex defaults to false");
+        assert!(
+            !h.is_case_sensitive,
+            "missing is_case_sensitive defaults to false"
+        );
+        assert!(h.enabled);
+    }
+
+    #[test]
     fn merge_ai_redact_rules_by_id() {
         let (db, ss, dir) = fixture();
         let data = json!({

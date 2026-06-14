@@ -49,6 +49,16 @@ describe("validateHighlightRule", () => {
         expect(err?.kind).toBe("zero_width");
     });
 
+    it("rejects pure lookaround as zero-width", () => {
+        const err = validateHighlightRule(rule("(?=ERROR)", { is_regex: true }));
+        expect(err?.kind).toBe("zero_width");
+    });
+
+    it("rejects name longer than 100 chars", () => {
+        const err = validateHighlightRule(rule("\\d+", { is_regex: true, name: "a".repeat(101) }));
+        expect(err?.kind).toBe("name_too_long");
+    });
+
     it("ignores non-regex rules", () => {
         expect(validateHighlightRule(rule("ERROR"))).toBeNull();
     });

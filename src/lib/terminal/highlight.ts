@@ -24,15 +24,71 @@ export interface CompiledHighlightRule {
 
 export type HighlightValidationError =
     | { kind: "invalid"; message: string }
-    | { kind: "zero_width" };
+    | { kind: "zero_width" }
+    | { kind: "name_too_long" };
+
+const MAX_HIGHLIGHT_NAME = 100;
+
+/**
+ * Detect regexes that consist solely of zero-width assertions (anchors,
+ * word boundaries, lookarounds). Such a pattern cannot visibly highlight text.
+ * This is a best-effort check; the runtime also defends against zero-width
+ * matches to avoid infinite loops.
+ */
+function isPureZeroWidth(pattern: string): boolean {
+    const s = pattern.trim();
+    if (!s) return true;
+    let i = 0;
+    while (i < s.length) {
+        const c = s[i];
+        if (c === "^" || c === "$") {
+            i++;
+            continue;
+        }
+        if (c === "\\" && (s[i + 1] === "b" || s[i + 1] === "B")) {
+            i += 2;
+            continue;
+        }
+        if (c === "(" && s[i + 1] === "?") {
+            if (s.slice(i, i + 3) === "(?=" || s.slice(i, i + 3) === "(?!") {
+                i += 3;
+            } else if (s.slice(i, i + 4) === "(?<=" || s.slice(i, i + 4) === "(?<!") {
+                i += 4;
+            } else {
+                return false;
+            }
+            let depth = 1;
+            while (i < s.length && depth > 0) {
+                const ch = s[i];
+                if (ch === "\\") {
+                    i += 2;
+                    continue;
+                }
+                if (ch === "(") depth++;
+                if (ch === ")") depth--;
+                i++;
+            }
+            if (depth !== 0) return false;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
 
 /**
  * Validate a single highlight rule. Only regex mode needs syntax checking.
  * Returns null when valid; otherwise returns an error kind for the UI to map to i18n.
  */
 export function validateHighlightRule(rule: HighlightRule): HighlightValidationError | null {
+    if (rule.name.length > MAX_HIGHLIGHT_NAME) {
+        return { kind: "name_too_long" };
+    }
     if (!rule.is_regex || !rule.keyword) return null;
     const flags = rule.is_case_sensitive ? "g" : "gi";
+    if (isPureZeroWidth(rule.keyword)) {
+        return { kind: "zero_width" };
+    }
     try {
         const re = new RegExp(rule.keyword, flags);
         if (re.test("")) {
