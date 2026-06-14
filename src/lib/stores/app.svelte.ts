@@ -30,7 +30,7 @@ export type SettingsPage =
   | "serial-profile-edit"
   | "snippets"
   | "highlights"
-  | "github-sync"
+  | "sync"
   | "import-export"
   | "import-ssh-config"
   | "recording-settings"

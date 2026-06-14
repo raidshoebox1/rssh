@@ -173,7 +173,7 @@ pub async fn github_push_impl(state: &AppState, password: String) -> AppResult<(
         // local-only secrets. Same builder as local export so the shape can't
         // drift; a disabled category is just absent from the JSON.
         let prefs = read_sync_prefs(&db)?;
-        let payload = build_payload(&db, ss.as_ref(), &data_dir, &ExportMode::GitHubPush(prefs))?;
+        let payload = build_payload(&db, ss.as_ref(), &data_dir, &ExportMode::RemotePush(prefs))?;
         let payload = serde_json::to_string_pretty(&payload)
             .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
 
@@ -213,6 +213,77 @@ pub async fn github_pull_impl(state: &AppState, password: String) -> AppResult<(
     let encrypted = sync.pull().await?;
 
     // decrypt + JSON parse + merge upsert: all blocking work.
+    let data_dir = state.data_dir.clone();
+    run_db_blocking(state, move |db, ss| {
+        let json = crate::crypto::decrypt(&encrypted, &password)?;
+        let data: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| AppError::config("json_parse_failed", json!({ "err": e.to_string() })))?;
+        crate::sync::config::merge_import(&db, ss.as_ref(), &data_dir, &data)
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// WebDAV sync
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn webdav_push(state: State<'_, AppState>, password: String) -> AppResult<()> {
+    webdav_push_impl(&state, password).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn webdav_push_impl(state: &AppState, password: String) -> AppResult<()> {
+    use crate::sync::webdav::WebDavSync;
+
+    let data_dir = state.data_dir.clone();
+    let (url, username, wd_password, json) = run_db_blocking(state, move |db, ss| {
+        let url = crate::db::settings::get(&db, "webdav_url")?
+            .ok_or_else(|| AppError::config("webdav_url_missing", json!({})))?;
+        let username = crate::db::settings::get(&db, "webdav_username")?.unwrap_or_default();
+        let wd_password = ss
+            .get(&setting_key("webdav_password"))?
+            .ok_or_else(|| AppError::config("webdav_password_missing", json!({})))?;
+
+        // Same filter + scrub rules as GitHub push; the only transport-specific
+        // part is where the encrypted blob lands.
+        let prefs = read_sync_prefs(&db)?;
+        let payload = build_payload(&db, ss.as_ref(), &data_dir, &ExportMode::RemotePush(prefs))?;
+        let payload = serde_json::to_string_pretty(&payload)
+            .map_err(|e| AppError::other("serde_failed", json!({ "err": e.to_string() })))?;
+
+        Ok((url, username, wd_password, payload))
+    })
+    .await?;
+
+    let encrypted = crate::crypto::encrypt(&json, &password)?;
+    let sync = WebDavSync::from_settings(&url, &username, &wd_password)?;
+    sync.push(&encrypted).await
+}
+
+#[tauri::command]
+pub async fn webdav_pull(state: State<'_, AppState>, password: String) -> AppResult<()> {
+    webdav_pull_impl(&state, password).await
+}
+
+/// Transport-agnostic body shared by the Tauri command and the headless server.
+pub async fn webdav_pull_impl(state: &AppState, password: String) -> AppResult<()> {
+    use crate::sync::webdav::WebDavSync;
+
+    let (url, username, wd_password) = run_db_blocking(state, |db, ss| {
+        let url = crate::db::settings::get(&db, "webdav_url")?
+            .ok_or_else(|| AppError::config("webdav_url_missing", json!({})))?;
+        let username = crate::db::settings::get(&db, "webdav_username")?.unwrap_or_default();
+        let wd_password = ss
+            .get(&setting_key("webdav_password"))?
+            .ok_or_else(|| AppError::config("webdav_password_missing", json!({})))?;
+        Ok((url, username, wd_password))
+    })
+    .await?;
+
+    let sync = WebDavSync::from_settings(&url, &username, &wd_password)?;
+    let encrypted = sync.pull().await?;
+
     let data_dir = state.data_dir.clone();
     run_db_blocking(state, move |db, ss| {
         let json = crate::crypto::decrypt(&encrypted, &password)?;
@@ -305,7 +376,7 @@ mod tests {
         crate::db::settings::set(&db, "sync_include_highlights", "0").unwrap();
         crate::db::settings::set(&db, "sync_include_snippets", "0").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let obj = v.as_object().unwrap();
         assert!(!obj.contains_key("highlights"), "disabled key omitted");
         assert!(!obj.contains_key("snippets"), "disabled key omitted");
@@ -321,7 +392,7 @@ mod tests {
         profile::insert(&db, &prof("p3", None)).unwrap();
         crate::db::settings::set(&db, "sync_profile_group_ids", "[\"g1\"]").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let ids: Vec<&str> = v["profiles"]
             .as_array()
             .unwrap()
@@ -338,7 +409,7 @@ mod tests {
         profile::insert(&db, &prof("p1", Some("g1"))).unwrap();
         crate::db::settings::set(&db, "sync_profile_group_ids", "[]").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         assert_eq!(v["profiles"].as_array().unwrap().len(), 0);
     }
 
@@ -360,7 +431,7 @@ mod tests {
         profile::insert(&db, &prof("p2", None)).unwrap();
         crate::db::settings::set(&db, "sync_profile_group_ids", "").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         assert_eq!(
             v["profiles"].as_array().unwrap().len(),
             2,
@@ -372,10 +443,11 @@ mod tests {
     fn push_omits_ai_key_when_disabled() {
         let (db, ss, dir) = fixture();
         crate::db::settings::set(&db, "ai_anthropic_model", "claude-x").unwrap();
-        ss.set(&setting_key("ai_anthropic_key"), "sk-secret").unwrap();
+        ss.set(&setting_key("ai_anthropic_key"), "sk-secret")
+            .unwrap();
         crate::db::settings::set(&db, "sync_include_ai_key", "0").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let anth = v["ai"]["providers"]
             .as_array()
             .unwrap()
@@ -391,9 +463,12 @@ mod tests {
         let (db, ss, dir) = fixture();
         crate::db::settings::set(&db, "sync_include_forwards", "0").unwrap();
         let prefs = read_sync_prefs(&db).unwrap();
-        let v = build_payload(&db, &ss, dir.path(), &ExportMode::GitHubPush(prefs)).unwrap();
+        let v = build_payload(&db, &ss, dir.path(), &ExportMode::RemotePush(prefs)).unwrap();
         let s = serde_json::to_string(&v).unwrap();
-        assert!(!s.contains("sync_include"), "toggle keys never leave the device");
+        assert!(
+            !s.contains("sync_include"),
+            "toggle keys never leave the device"
+        );
         assert!(!s.contains("sync_profile_group_ids"));
     }
 }

@@ -15,7 +15,7 @@
   import GroupManager from "./GroupManager.svelte";
   import SnippetManager from "./SnippetManager.svelte";
   import HighlightManager from "./HighlightManager.svelte";
-  import GitHubSyncScreen from "./GitHubSyncScreen.svelte";
+  import SyncScreen from "./SyncScreen.svelte";
   import ImportExportScreen from "./ImportExportScreen.svelte";
   import SshConfigImportScreen from "./SshConfigImportScreen.svelte";
   import RecordingSettings from "./RecordingSettings.svelte";
@@ -46,7 +46,7 @@
     "groups":             { component: GroupManager },
     "snippets":           { component: SnippetManager },
     "highlights":         { component: HighlightManager },
-    "github-sync":        { component: GitHubSyncScreen },
+    "sync":               { component: SyncScreen },
     "import-export":      { component: ImportExportScreen },
     "import-ssh-config":  { component: SshConfigImportScreen },
     "shell-settings":     { component: ShellSettings },
@@ -83,7 +83,7 @@
     { id: "highlights", label: t("settings.section.highlights"), section: "settings.group.appearance" },
     { id: "snippets", label: t("settings.section.snippets"), section: "settings.group.appearance" },
     // Advanced: power features beyond a plain terminal (sync, AI, CLI).
-    { id: "github-sync", label: t("settings.section.github_sync"), section: "settings.group.advanced" },
+    { id: "sync", label: t("settings.section.sync"), section: "settings.group.advanced" },
     { id: "ai", label: t("settings.section.ai"), section: "settings.group.advanced" },
     { id: "cli", label: t("settings.section.cli"), section: "settings.group.advanced" },
     { id: "shortcuts", label: t("settings.section.shortcuts"), section: "settings.group.help" },

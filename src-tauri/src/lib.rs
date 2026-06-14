@@ -239,6 +239,8 @@ pub fn run() {
             commands::sync::import_config_from_file,
             commands::sync::github_push,
             commands::sync::github_pull,
+            commands::sync::webdav_push,
+            commands::sync::webdav_pull,
             // AI 排障
             ai::commands::ai_list_skills,
             ai::commands::ai_get_skill,

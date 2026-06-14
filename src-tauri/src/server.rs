@@ -1019,6 +1019,14 @@ async fn dispatch_async(
             ok(crate::commands::sync::github_pull_impl(state, arg(&args, "password")?).await)
         }
 
+        // ---- WebDAV config sync ----
+        "webdav_push" => {
+            ok(crate::commands::sync::webdav_push_impl(state, arg(&args, "password")?).await)
+        }
+        "webdav_pull" => {
+            ok(crate::commands::sync::webdav_pull_impl(state, arg(&args, "password")?).await)
+        }
+
         // ---- port forwarding: start (stop is sync, in dispatch) ----
         "forward_start" => {
             ok(crate::commands::forward::forward_start_impl(state, arg(&args, "forwardId")?).await)

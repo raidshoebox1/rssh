@@ -124,7 +124,7 @@ fn config_push(conn: &CliCtx) -> AppResult<()> {
         conn,
         ss,
         &conn.data_dir,
-        &rssh_lib::sync::config::ExportMode::GitHubPush(prefs),
+        &rssh_lib::sync::config::ExportMode::RemotePush(prefs),
     )?;
     let mut json_data = serde_json::to_string_pretty(&payload)
         .unwrap_or_else(|e| die(format!("Serialization failed: {e}")));

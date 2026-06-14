@@ -212,7 +212,7 @@ pub fn setting_key(name: &str) -> String {
 }
 
 /// settings 中按 secret 走 SecretStore 的键白名单。
-pub const SECRET_SETTINGS: &[&str] = &["github_token"];
+pub const SECRET_SETTINGS: &[&str] = &["github_token", "webdav_password"];
 
 pub fn is_secret_setting(key: &str) -> bool {
     SECRET_SETTINGS.contains(&key)
@@ -331,13 +331,14 @@ mod tests {
     // ── SECRET_SETTINGS 白名单稳定 ────────────────────────────────
 
     #[test]
-    fn secret_settings_includes_github_token() {
+    fn secret_settings_includes_expected_keys() {
         assert!(SECRET_SETTINGS.contains(&"github_token"));
+        assert!(SECRET_SETTINGS.contains(&"webdav_password"));
     }
 
     #[test]
     fn secret_settings_is_non_empty() {
-        // 防回归：未来谁误删空白名单，github_token 就会落 settings 表明文
+        // 防回归：未来谁误删空白名单，secret 就会落 settings 表明文
         assert!(!SECRET_SETTINGS.is_empty());
     }
 
