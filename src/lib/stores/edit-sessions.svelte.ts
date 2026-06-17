@@ -11,6 +11,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { errMsg, t } from "../i18n/index.svelte.ts";
 import { toast } from "./toast.svelte.ts";
 
@@ -39,18 +40,16 @@ function find(editId: string): EditSession | undefined {
  * @param sessionId 父 SSH session id（回传时新开 SFTP channel）
  * @param remotePath 远端文件完整路径
  * @param remoteName 文件名（用于 UI 显示）
- * @param openWith  undefined=默认程序；string=指定程序（"打开为"）
  */
 export async function startEdit(
     sftpId: string,
     sessionId: string,
     remotePath: string,
     remoteName: string,
-    openWith?: string,
 ): Promise<void> {
     const result = await invoke<{ edit_id: string; local_path: string }>(
         "sftp_open_for_edit",
-        { sftpId, sessionId, remotePath, openWith: openWith ?? null },
+        { sftpId, sessionId, remotePath },
     );
 
     const session: EditSession = {
@@ -65,7 +64,13 @@ export async function startEdit(
     // 监听 file_changed / file_deleted。
     const unlistenChanged = await listen(`sftp:file_changed:${result.edit_id}`, () => {
         const s = find(result.edit_id);
-        if (s && !s.pendingChange) s.pendingChange = true;
+        if (s && !s.pendingChange) {
+            s.pendingChange = true;
+            // 把应用窗口拉到前台 + 取消最小化，让用户立刻看到"文件已更改"对话框。
+            const w = getCurrentWindow();
+            w.unminimize().catch(() => {});
+            w.setFocus().catch(() => {});
+        }
     });
     const unlistenDeleted = await listen(`sftp:file_deleted:${result.edit_id}`, () => {
         // 临时文件被删除（用户手动删 / 外部程序清理）→ 自动取消，不回传。

@@ -66,7 +66,6 @@
 
     /** 大文件确认对话框状态：> 10 MB 时弹出确认。 */
     let largeFileEntry = $state<RemoteEntry | null>(null);
-    let largeFileOpenWith = $state<string | undefined>(undefined);
 
     /** Tauri event unlisteners（SSH close + edit session 相关）。 */
     let unlisteners: UnlistenFn[] = [];
@@ -330,39 +329,26 @@
     const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024;
 
     /** "打开"：用系统默认程序打开远程文件，进入编辑模式。 */
-    async function openExternally(entry: RemoteEntry, openWith?: string) {
+    async function openExternally(entry: RemoteEntry) {
         if (!sftpId || !meta.sessionId) return;
         // 目录不打开（右键菜单 gate 了，但防御性检查）。
         if (entry.is_dir) return;
         // > 10 MB 弹确认。
         if (entry.size > LARGE_FILE_THRESHOLD) {
             largeFileEntry = entry;
-            largeFileOpenWith = openWith;
             return;
         }
-        await doOpenExternally(entry, openWith);
+        await doOpenExternally(entry);
     }
 
-    async function doOpenExternally(entry: RemoteEntry, openWith?: string) {
+    async function doOpenExternally(entry: RemoteEntry) {
         if (!sftpId || !meta.sessionId) return;
         try {
-            await editSessions.startEdit(sftpId, meta.sessionId, entryPath(entry), entry.name, openWith);
+            await editSessions.startEdit(sftpId, meta.sessionId, entryPath(entry), entry.name);
         } catch (e: any) {
             toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
         }
         closeCtxMenu();
-    }
-
-    /** "打开为…"：弹出文件选择器选程序，再用该程序打开。 */
-    async function openWith(entry: RemoteEntry) {
-        if (!sftpId || !meta.sessionId) return;
-        try {
-            const prog = await invoke<string | null>("sftp_pick_open_path");
-            if (!prog) return; // 用户取消
-            await openExternally(entry, prog);
-        } catch (e: any) {
-            toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
-        }
     }
 
     /** 用户在"文件已更改"模态框点"上传" */
@@ -674,7 +660,6 @@
          style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
         {#if !ctxMenu!.entry.is_dir}
             <button class="ctx-item" onclick={() => openExternally(ctxMenu!.entry)}>{t("sftp.ctx.open")}</button>
-            <button class="ctx-item" onclick={() => openWith(ctxMenu!.entry)}>{t("sftp.ctx.open_with")}</button>
             <div class="ctx-sep"></div>
         {/if}
         <button class="ctx-item" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
@@ -758,17 +743,15 @@
 {/if}
 
 {#if largeFileEntry}
-    <div class="modal-overlay" onclick={() => { largeFileEntry = null; largeFileOpenWith = undefined; }}>
+    <div class="modal-overlay" onclick={() => { largeFileEntry = null; }}>
         <div class="modal-card" onclick={(e) => e.stopPropagation()}>
             <p class="modal-text">{t("sftp.edit.large_file_warn", { size: formatSize(largeFileEntry.size) })}</p>
             <div class="modal-actions">
-                <button class="btn btn-sm" onclick={() => { largeFileEntry = null; largeFileOpenWith = undefined; }}>{t("common.cancel")}</button>
+                <button class="btn btn-sm" onclick={() => { largeFileEntry = null; }}>{t("common.cancel")}</button>
                 <button class="btn btn-sm btn-accent" onclick={() => {
                     const e = largeFileEntry;
-                    const w = largeFileOpenWith;
                     largeFileEntry = null;
-                    largeFileOpenWith = undefined;
-                    if (e) void doOpenExternally(e, w);
+                    if (e) void doOpenExternally(e);
                 }}>{t("sftp.ctx.open")}</button>
             </div>
         </div>

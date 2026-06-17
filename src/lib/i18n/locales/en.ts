@@ -96,7 +96,6 @@ const en = {
   "sftp.ctx.copy_path_terminal": "Copy path to terminal",
   "sftp.ctx.properties": "Properties",
   "sftp.ctx.open": "Open",
-  "sftp.ctx.open_with": "Open With…",
   "sftp.edit.changed_title": "File changed",
   "sftp.edit.changed_body": "\"{name}\" was modified. Upload to remote?",
   "sftp.edit.accept": "Upload",

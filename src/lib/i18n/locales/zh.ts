@@ -98,7 +98,6 @@ const zh: Messages = {
   "sftp.ctx.copy_path_terminal": "复制路径到终端",
   "sftp.ctx.properties": "属性",
   "sftp.ctx.open": "打开",
-  "sftp.ctx.open_with": "打开为…",
   "sftp.edit.changed_title": "文件已更改",
   "sftp.edit.changed_body": "“{name}”已修改，是否上传到远程？",
   "sftp.edit.accept": "上传",

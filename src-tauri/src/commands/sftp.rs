@@ -319,14 +319,6 @@ pub async fn sftp_pick_save_path(default_name: String) -> AppResult<Option<Strin
     Ok(handle.map(|h| h.path().display().to_string()))
 }
 
-/// Open native Open dialog and return the chosen path. No transfer happens here.
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn sftp_pick_open_path() -> AppResult<Option<String>> {
-    let handle = rfd::AsyncFileDialog::new().pick_file().await;
-    Ok(handle.map(|h| h.path().display().to_string()))
-}
-
 /// Pick a folder via the native dialog. Used both as the destination root
 /// (multi-select download) and the source root (recursive upload) — both
 /// flows want the same rfd `pick_folder()` call, so a single command suffices.
@@ -518,8 +510,7 @@ fn remote_filename(remote_path: &str) -> String {
 /// 用本地程序打开远程文件。下载到 {temp}/rssh-edit/{edit_id}/{filename}，
 /// 用 opener 打开，spawn 轮询器检测后续修改。
 ///
-/// `open_with` 为 None 时用系统默认程序；Some(path) 时用指定程序（"打开为"）。
-/// `session_id` 是父 SSH session id，用于回传时新开 SFTP channel。
+/// 用系统默认程序打开。`session_id` 是父 SSH session id，用于回传时新开 SFTP channel。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_open_for_edit(
@@ -528,7 +519,6 @@ pub async fn sftp_open_for_edit(
     sftp_id: String,
     session_id: String,
     remote_path: String,
-    open_with: Option<String>,
 ) -> AppResult<serde_json::Value> {
     let sftp = get_sftp(&state, &sftp_id)?;
     let data = sftp.download(&remote_path).await?;
@@ -540,15 +530,10 @@ pub async fn sftp_open_for_edit(
     let local_path = temp_dir.join(&filename);
     tokio::fs::write(&local_path, &data).await?;
 
-    // 用 opener 打开。open_with = None → 默认程序；Some → 指定程序。
-    // open_path 的签名要求 path: impl Into<String>，PathBuf 不直接 Into<String>，
-    // 所以转成 String 传入。
+    // 用 opener 以系统默认程序打开。open_path 要求 path: impl Into<String>，
+    // PathBuf 不直接 Into<String>，所以转成 String 传入。
     let local_path_str = local_path.to_string_lossy().into_owned();
-    let open_result = if let Some(ref prog) = open_with {
-        app.opener().open_path(local_path_str.clone(), Some(prog.clone()))
-    } else {
-        app.opener().open_path(local_path_str.clone(), None::<String>)
-    };
+    let open_result = app.opener().open_path(local_path_str, None::<String>);
     if let Err(e) = open_result {
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
         return Err(AppError::other(
