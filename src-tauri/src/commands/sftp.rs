@@ -515,9 +515,9 @@ fn remote_filename(remote_path: &str) -> String {
 /// `sftp_open_for_edit` 的返回值：edit_id + 本地临时路径。
 #[cfg(not(target_os = "android"))]
 #[derive(serde::Serialize)]
-struct OpenForEditResult {
-    edit_id: String,
-    local_path: String,
+pub struct OpenForEditResult {
+    pub edit_id: String,
+    pub local_path: String,
 }
 
 /// 用本地程序打开远程文件。下载到 {temp}/rssh-edit/{edit_id}/{filename}，
