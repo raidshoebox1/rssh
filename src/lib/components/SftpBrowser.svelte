@@ -658,7 +658,7 @@
          class:ready={ctxReady}
          bind:this={ctxMenuEl}
          style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
-        {#if !ctxMenu!.entry.is_dir}
+        {#if !ctxMenu!.entry.is_dir && !app.isMobile}
             <button class="ctx-item" onclick={() => openExternally(ctxMenu!.entry)}>{t("sftp.ctx.open")}</button>
             <div class="ctx-sep"></div>
         {/if}

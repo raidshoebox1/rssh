@@ -467,7 +467,7 @@ impl EditSession {
 #[cfg(not(target_os = "android"))]
 fn poll_file_changes(app: AppHandle, edit_id: String, local_path: PathBuf, cancel: Arc<AtomicBool>) {
     tokio::spawn(async move {
-        let mut baseline = match std::fs::metadata(&local_path) {
+        let mut baseline = match tokio::fs::metadata(&local_path).await {
             Ok(m) => m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
             Err(_) => return,
         };
@@ -478,7 +478,7 @@ fn poll_file_changes(app: AppHandle, edit_id: String, local_path: PathBuf, cance
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            match std::fs::metadata(&local_path) {
+            match tokio::fs::metadata(&local_path).await {
                 Ok(meta) => {
                     if let Ok(mtime) = meta.modified() {
                         if mtime > baseline {
@@ -497,20 +497,34 @@ fn poll_file_changes(app: AppHandle, edit_id: String, local_path: PathBuf, cance
 }
 
 /// 从 remote_path 提取最后一段作为 filename（用于临时文件名）。
+/// 防御路径穿越：拒绝 `.`、`..`、含路径分隔符的名称，回退到 `"file"`。
 #[cfg(not(target_os = "android"))]
 fn remote_filename(remote_path: &str) -> String {
-    remote_path
+    let name = remote_path
         .rsplit('/')
         .next()
         .filter(|s| !s.is_empty())
-        .unwrap_or("file")
-        .to_string()
+        .unwrap_or("file");
+    if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        "file".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// `sftp_open_for_edit` 的返回值：edit_id + 本地临时路径。
+#[cfg(not(target_os = "android"))]
+#[derive(serde::Serialize)]
+struct OpenForEditResult {
+    edit_id: String,
+    local_path: String,
 }
 
 /// 用本地程序打开远程文件。下载到 {temp}/rssh-edit/{edit_id}/{filename}，
 /// 用 opener 打开，spawn 轮询器检测后续修改。
 ///
 /// 用系统默认程序打开。`session_id` 是父 SSH session id，用于回传时新开 SFTP channel。
+/// 流式下载带 100 MB 硬上限，防止恶意/误操作导致 OOM。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn sftp_open_for_edit(
@@ -519,16 +533,20 @@ pub async fn sftp_open_for_edit(
     sftp_id: String,
     session_id: String,
     remote_path: String,
-) -> AppResult<serde_json::Value> {
+) -> AppResult<OpenForEditResult> {
     let sftp = get_sftp(&state, &sftp_id)?;
-    let data = sftp.download(&remote_path).await?;
 
     let edit_id = uuid::Uuid::new_v4().to_string();
     let filename = remote_filename(&remote_path);
     let temp_dir = std::env::temp_dir().join("rssh-edit").join(&edit_id);
     tokio::fs::create_dir_all(&temp_dir).await?;
     let local_path = temp_dir.join(&filename);
-    tokio::fs::write(&local_path, &data).await?;
+
+    // 流式下载带硬上限，避免全量入内存（OOM 防护）。
+    // download_to_path 用 .part + rename 原子写入，失败不污染 local_path。
+    const MAX_EDIT_FILE_SIZE: u64 = 100 * 1024 * 1024;
+    sftp.download_to_path(&remote_path, &local_path, MAX_EDIT_FILE_SIZE)
+        .await?;
 
     // 用 opener 以系统默认程序打开。open_path 要求 path: impl Into<String>，
     // PathBuf 不直接 Into<String>，所以转成 String 传入。
@@ -546,10 +564,10 @@ pub async fn sftp_open_for_edit(
     locked(&state.edit_sessions)?.insert(edit_id.clone(), session);
     poll_file_changes(app, edit_id.clone(), local_path.clone(), cancel);
 
-    Ok(serde_json::json!({
-        "edit_id": edit_id,
-        "local_path": local_path.display().to_string()
-    }))
+    Ok(OpenForEditResult {
+        edit_id,
+        local_path: local_path.display().to_string(),
+    })
 }
 
 /// 接受外部编辑器的修改：读取本地临时文件 → 新开 SFTP channel 上传回远端。
@@ -582,31 +600,12 @@ pub async fn sftp_accept_edit(
         SftpHandle::from_handle(&ssh_handle, parent).await
     })
     .await?;
-    let sftp_id = uuid::Uuid::new_v4().to_string();
-    locked(&state.sftp_sessions)?.insert(sftp_id.clone(), Arc::new(sftp));
 
-    // 读取本地临时文件 → 上传回远端。两个操作错误类型不同（io::Error vs AppError），
-    // 分别处理，避免 ? 在混合类型上失败。
-    // Arc clone 让 async 块拥有自己的引用，不借用被 move 的 sftp。
-    let sftp_handle = {
-        let sessions = locked(&state.sftp_sessions)?;
-        sessions
-            .get(&sftp_id)
-            .cloned()
-            .ok_or_else(|| AppError::not_found("sftp_session_not_found", json!({})))?
-    };
-    let result: AppResult<()> = async {
-        let data = tokio::fs::read(&local_path)
-            .await
-            .map_err(|e| AppError::other("sftp_edit_read_failed", json!({ "err": e.to_string() })))?;
-        sftp_handle.upload(&remote_path, &data).await
-    }
-    .await;
-
-    // 无论成功失败都关掉临时 SFTP channel。
-    locked(&state.sftp_sessions)?.remove(&sftp_id);
-
-    result?;
+    // 读取本地临时文件 → 上传回远端。sftp 在此作用域结束后 drop，自动关闭临时 channel。
+    let data = tokio::fs::read(&local_path)
+        .await
+        .map_err(|e| AppError::other("sftp_edit_read_failed", json!({ "err": e.to_string() })))?;
+    sftp.upload(&remote_path, &data).await?;
 
     Ok(())
 }
