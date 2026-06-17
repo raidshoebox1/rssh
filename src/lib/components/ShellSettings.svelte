@@ -4,7 +4,8 @@
   import * as app from "../stores/app.svelte.ts";
   import * as transfers from "../stores/transfers.svelte.ts";
   import { isMac } from "../stores/keymap.svelte.ts";
-  import { t } from "../i18n/index.svelte.ts";
+  import { t, errMsg } from "../i18n/index.svelte.ts";
+  import { toast } from "../stores/toast.svelte.ts";
   import Select from "./Select.svelte";
 
   let shells = $state<string[]>([]);
@@ -116,7 +117,11 @@
   }
 
   async function saveCtrlRightClickMenu() {
-    await app.setCtrlRightClickMenu(ctrlRightClickMenu);
+    try {
+      await app.setCtrlRightClickMenu(ctrlRightClickMenu);
+    } catch (e: any) {
+      toast.error(`${t("toast.error.save")}: ${errMsg(e)}`);
+    }
   }
 
   async function saveSftpMaxConcurrent() {

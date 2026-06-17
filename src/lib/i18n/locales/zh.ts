@@ -935,7 +935,7 @@ const zh: Messages = {
   "settings.shell.right_click_paste": "粘贴",
   "settings.shell.right_click_copy_paste": "有选区则复制，否则粘贴",
   "settings.shell.ctrl_right_click_menu": "{mod}+右键打开菜单",
-  "settings.shell.ctrl_right_click_menu_desc": "右键粘贴时，按住 {mod} 右键可打开系统菜单。",
+  "settings.shell.ctrl_right_click_menu_desc": "右键设为「粘贴」或「有选区则复制，否则粘贴」时，按住 {mod} 右键可打开系统菜单。",
   // CLI 设置
   "settings.cli.installed": "已安装",
   "settings.cli.installed_to": "已安装到 {path}",
