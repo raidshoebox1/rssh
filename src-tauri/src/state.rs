@@ -23,6 +23,11 @@ pub struct AppState {
     #[cfg(not(target_os = "android"))]
     pub serial_sessions: Mutex<HashMap<String, SerialHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
+    /// "用本地程序打开"的活跃编辑会话：edit_id → EditSession。
+    /// 用户在外部编辑器保存文件后，前端轮询检测 mtime 变化、弹对话框问是否回传。
+    /// SFTP 面板关闭 / SSH 断连时由前端调 `sftp_cancel_edit` 清理条目 + 删临时文件。
+    #[cfg(not(target_os = "android"))]
+    pub edit_sessions: Mutex<HashMap<String, crate::commands::sftp::EditSession>>,
     /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。
     /// 用户在传输页点"取消"会把对应位置 1，streaming 循环每个 chunk 查一次，
     /// 命中即提前 Err 退出。传输结束（成功 / 失败 / 取消）都从 map 里移除。
