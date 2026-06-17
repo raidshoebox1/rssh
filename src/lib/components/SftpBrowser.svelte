@@ -626,6 +626,16 @@
                     class:dir={e.is_dir}
                     class:selected={selected.has(e.name)}
                     oncontextmenu={(ev) => onContextMenu(ev, e)}
+                    ondblclick={(ev) => {
+                        if ((ev.target as HTMLElement).tagName === 'INPUT') return;
+                        if (!e.is_dir && !app.isMobile) openExternally(e);
+                    }}
+                    onmousedown={(ev) => {
+                        if (ev.button === 1) {
+                            ev.preventDefault();
+                            copyPathToTerminal(e);
+                        }
+                    }}
                 >
                     <span class="cell-check">
                         <input
