@@ -142,6 +142,8 @@ pub fn run() {
                 #[cfg(not(target_os = "android"))]
                 serial_sessions: Mutex::new(HashMap::new()),
                 sftp_sessions: Mutex::new(HashMap::new()),
+                #[cfg(not(target_os = "android"))]
+                edit_sessions: Mutex::new(HashMap::new()),
                 transfer_cancels: Mutex::new(HashMap::new()),
                 active_forwards: Mutex::new(HashMap::new()),
                 auth_waiters: Mutex::new(HashMap::new()),

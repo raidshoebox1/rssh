@@ -541,10 +541,13 @@ pub async fn sftp_open_for_edit(
     tokio::fs::write(&local_path, &data).await?;
 
     // 用 opener 打开。open_with = None → 默认程序；Some → 指定程序。
+    // open_path 的签名要求 path: impl Into<String>，PathBuf 不直接 Into<String>，
+    // 所以转成 String 传入。
+    let local_path_str = local_path.to_string_lossy().into_owned();
     let open_result = if let Some(ref prog) = open_with {
-        app.opener().open_path(&local_path, Some(prog.as_str()))
+        app.opener().open_path(local_path_str.clone(), Some(prog.clone()))
     } else {
-        app.opener().open_path(&local_path, None::<&str>)
+        app.opener().open_path(local_path_str.clone(), None::<String>)
     };
     if let Err(e) = open_result {
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -599,11 +602,19 @@ pub async fn sftp_accept_edit(
 
     // 读取本地临时文件 → 上传回远端。两个操作错误类型不同（io::Error vs AppError），
     // 分别处理，避免 ? 在混合类型上失败。
+    // Arc clone 让 async 块拥有自己的引用，不借用被 move 的 sftp。
+    let sftp_handle = {
+        let sessions = locked(&state.sftp_sessions)?;
+        sessions
+            .get(&sftp_id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("sftp_session_not_found", json!({})))?
+    };
     let result: AppResult<()> = async {
         let data = tokio::fs::read(&local_path)
             .await
             .map_err(|e| AppError::other("sftp_edit_read_failed", json!({ "err": e.to_string() })))?;
-        sftp.upload(&remote_path, &data).await
+        sftp_handle.upload(&remote_path, &data).await
     }
     .await;
 
