@@ -84,6 +84,9 @@ libc = "0.2"
 # PTY & native file dialogs & clipboard — 桌面平台专用
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
+# 文件系统事件监听（inotify/FSEvents/ReadDirectoryChangesW）—— 用于
+# "用本地程序打开远程文件"编辑模式的即时变更检测，替代 2 秒轮询。
+notify = "6"
 # Serial console transport — a 3rd byte-stream alongside SSH/PTY. macOS uses
 # IOKit and Windows uses the Win32 API (no extra system dep); Linux links
 # libudev for port enumeration, so Linux CI/packaging needs `libudev-dev` at

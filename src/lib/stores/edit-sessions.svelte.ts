@@ -2,8 +2,9 @@
  * "用本地程序打开"编辑会话 store。
  *
  * 后端 sftp_open_for_edit 下载远程文件到临时目录、用 opener 打开、spawn
- * 一个 mtime 轮询器。文件被外部编辑器保存时后端 emit `sftp:file_changed:{edit_id}`，
- * 本 store 监听该事件、把对应 session 标 pendingChange=true 让 SftpBrowser 弹模态框。
+ * 一个 notify watcher。文件被外部编辑器保存时后端 emit `sftp:file_changed:{edit_id}`，
+ * 并通过 request_user_attention 把窗口拉到前台 + 闪烁任务栏图标；本 store
+ * 监听该事件、把对应 session 标 pendingChange=true 让 SftpBrowser 弹模态框。
  * 用户点"上传" → sftp_accept_edit 回传远端；点"取消" → 清 pendingChange（不回传）。
  * SFTP 面板关闭 / SSH 断连 → cancelAllForSession 清理所有相关会话。
  *
@@ -11,7 +12,6 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { errMsg, t } from "../i18n/index.svelte.ts";
 import { toast } from "./toast.svelte.ts";
 
@@ -62,14 +62,12 @@ export async function startEdit(
     _list = [..._list, session];
 
     // 监听 file_changed / file_deleted。
+    // 窗口激活（unminimize + set_focus + request_user_attention）已由后端
+    // poll_file_changes 在 emit 之前完成，前端只需设置 pendingChange 弹模态框。
     const unlistenChanged = await listen(`sftp:file_changed:${result.edit_id}`, () => {
         const s = find(result.edit_id);
         if (s && !s.pendingChange) {
             s.pendingChange = true;
-            // 把应用窗口拉到前台 + 取消最小化，让用户立刻看到"文件已更改"对话框。
-            const w = getCurrentWindow();
-            w.unminimize().catch(() => {});
-            w.setFocus().catch(() => {});
         }
     });
     const unlistenDeleted = await listen(`sftp:file_deleted:${result.edit_id}`, () => {

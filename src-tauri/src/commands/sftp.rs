@@ -8,6 +8,11 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+/// 桌面端专用 import：notify 文件系统事件监听 + tauri::Manager（get_webview_windows）。
+/// Android 上这些模块不存在，与函数级 #[cfg(not(target_os = "android"))] 配合。
+#[cfg(not(target_os = "android"))]
+use notify::{RecursiveMode, Watcher};
+
 use crate::error::{locked, AppError, AppResult};
 use crate::models::{Credential, CredentialType};
 use crate::ssh::sftp::{FileStat, RemoteEntry, SftpHandle, WalkEntry};
@@ -462,34 +467,133 @@ impl EditSession {
     }
 }
 
-/// 轮询临时文件 mtime。变化 → emit `sftp:file_changed:{edit_id}`；删除 →
-/// emit `sftp:file_deleted:{edit_id}` 并退出。
+/// 将应用所有窗口拉到前台 + 闪烁任务栏图标（Windows）/ Dock 弹跳（macOS）/
+/// urgency hint（Linux）。`request_user_attention(Critical)` 是 OS 认可的
+/// "请求注意"方式，不受后台进程焦点窃取保护限制。
+#[cfg(not(target_os = "android"))]
+fn bring_window_to_front(app: &AppHandle) {
+    use tauri::Manager;
+    for win in app.get_webview_windows() {
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
+    }
+}
+
+/// 监听临时文件变更。用 notify watcher（inotify/FSEvents/ReadDirectoryChangesW）
+/// 替代轮询，实现即时变更检测。watcher 创建/监听失败时退化为 2 秒轮询。
+///
+/// 监听父目录而非文件本身——vim/VS Code 等编辑器用"写临时文件 + rename"保存，
+/// 直接 watch 文件在 rename 后会丢失事件。事件去抖 300ms 避免连续写入的抖动。
 #[cfg(not(target_os = "android"))]
 fn poll_file_changes(app: AppHandle, edit_id: String, local_path: PathBuf, cancel: Arc<AtomicBool>) {
+    let dir = match local_path.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return,
+    };
+    let filename = local_path.file_name().map(|f| f.to_os_string());
+
     tokio::spawn(async move {
+        let changed_event = format!("sftp:file_changed:{edit_id}");
+        let deleted_event = format!("sftp:file_deleted:{edit_id}");
         let mut baseline = match tokio::fs::metadata(&local_path).await {
             Ok(m) => m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
             Err(_) => return,
         };
-        let changed_event = format!("sftp:file_changed:{edit_id}");
-        let deleted_event = format!("sftp:file_deleted:{edit_id}");
-        loop {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
+
+        // 尝试用 notify watcher（即时事件）；失败则退化为 2 秒轮询。
+        // watcher 回调是同步的，用 unbounded channel 桥接到 async。
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<notify::Event>();
+        let watcher = match notify::recommended_watcher(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            },
+        ) {
+            Ok(mut w) => {
+                if w.watch(&dir, RecursiveMode::NonRecursive).is_ok() {
+                    Some(w)
+                } else {
+                    None
+                }
             }
-            match tokio::fs::metadata(&local_path).await {
-                Ok(meta) => {
-                    if let Ok(mtime) = meta.modified() {
-                        if mtime > baseline {
-                            baseline = mtime;
-                            let _ = app.emit(&changed_event, ());
+            Err(_) => None,
+        };
+
+        if let Some(_watcher) = watcher {
+            // notify 模式：事件驱动 + 去抖
+            loop {
+                tokio::select! {
+                    // cancel 检查（100ms 一次，轻量）
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                    }
+                    event = rx.recv() => {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                        let Some(event) = event else { break; };
+                        // 只处理目标文件的事件（watch 父目录会收到同目录其他文件的事件）
+                        let matches = event.paths.iter().any(|p| p.file_name() == filename.as_deref());
+                        if !matches { continue; }
+                        // 删除事件 → 确认文件确实没了再 emit
+                        if matches!(event.kind, notify::EventKind::Remove(_)) {
+                            if tokio::fs::metadata(&local_path).await.is_err() {
+                                bring_window_to_front(&app);
+                                let _ = app.emit(&deleted_event, ());
+                                break;
+                            }
+                            continue;
+                        }
+                        // 修改/创建事件 → 去抖：等 300ms 无新事件，避免编辑器
+                        // 保存时的连续写入（Create temp → Modify → Rename）触发多次
+                        loop {
+                            match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+                                Ok(Some(_)) => continue,  // 还有事件，重置去抖窗口
+                                Ok(None) => break,         // channel 关闭（watcher drop）
+                                Err(_) => break,           // 300ms 无新事件，去抖结束
+                            }
+                        }
+                        // 确认实际 mtime 变化（spurious 事件不触发误报）
+                        match tokio::fs::metadata(&local_path).await {
+                            Ok(meta) => {
+                                if let Ok(mtime) = meta.modified() {
+                                    if mtime > baseline {
+                                        baseline = mtime;
+                                        bring_window_to_front(&app);
+                                        let _ = app.emit(&changed_event, ());
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                bring_window_to_front(&app);
+                                let _ = app.emit(&deleted_event, ());
+                                break;
+                            }
                         }
                     }
                 }
-                Err(_) => {
-                    let _ = app.emit(&deleted_event, ());
-                    break;
+            }
+            // _watcher 在此 drop，停止监听
+        } else {
+            // 退化为轮询（notify 创建/监听失败——exotic 文件系统）
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
+                match tokio::fs::metadata(&local_path).await {
+                    Ok(meta) => {
+                        if let Ok(mtime) = meta.modified() {
+                            if mtime > baseline {
+                                baseline = mtime;
+                                bring_window_to_front(&app);
+                                let _ = app.emit(&changed_event, ());
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        bring_window_to_front(&app);
+                        let _ = app.emit(&deleted_event, ());
+                        break;
+                    }
                 }
             }
         }

@@ -281,6 +281,7 @@ export function installTauriShim(): void {
         // appears — off-Tauri there's no native window, so no-op.
         "plugin:window|unminimize": async () => {},
         "plugin:window|set_focus": async () => {},
+        "plugin:window|request_user_attention": async () => {},
     };
 
     // Running inside the IDEA plugin's JCEF host? The bridge injects __RSSH_PICK__;

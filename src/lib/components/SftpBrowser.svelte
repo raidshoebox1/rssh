@@ -760,7 +760,7 @@
 
 {#each editSessions.editSessions() as s (s.editId)}
     {#if s.pendingChange}
-        <div class="modal-overlay" onclick={() => dismissEditChange(s.editId)}>
+        <div class="modal-overlay">
             <div class="modal-card" onclick={(e) => e.stopPropagation()}>
                 <p class="modal-title">{t("sftp.edit.changed_title")}</p>
                 <p class="modal-text">{t("sftp.edit.changed_body", { name: s.remoteName })}</p>
