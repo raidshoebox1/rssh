@@ -473,7 +473,7 @@ impl EditSession {
 #[cfg(not(target_os = "android"))]
 fn bring_window_to_front(app: &AppHandle) {
     use tauri::Manager;
-    for win in app.get_webview_windows() {
+    for (_, win) in app.webview_windows() {
         let _ = win.unminimize();
         let _ = win.set_focus();
         let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
