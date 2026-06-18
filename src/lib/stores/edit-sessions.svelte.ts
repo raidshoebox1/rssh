@@ -74,6 +74,7 @@ export async function startEdit(
         sessionId,
         remotePath,
         localPath: local_path,
+        editMode: true,
     });
 
     // 阶段 3: 下载完成后打开文件 + 启动监听
@@ -127,6 +128,8 @@ export async function startEdit(
             unlistenChanged();
             unlistenDeleted();
         });
+    }).catch((e) => {
+        console.error("[edit-sessions] startEdit download callback failed:", e);
     });
 }
 
@@ -140,12 +143,15 @@ export async function acceptEdit(editId: string): Promise<void> {
         sessionId: s.sessionId,
         localPath: s.localPath,
         remotePath: s.remotePath,
+        editMode: true,
     });
     void transfers.waitDone(id).then(() => {
         const tr = transfers.list().find((x) => x.id === id);
         if (tr && tr.status === "failed") {
             toast.error(`${t("sftp.edit.upload_failed")}: ${tr.error ?? ""}`);
         }
+    }).catch((e) => {
+        console.error("[edit-sessions] acceptEdit upload callback failed:", e);
     });
 }
 

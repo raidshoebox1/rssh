@@ -85,6 +85,9 @@ export interface Transfer {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** true = 由"用本地程序打开"编辑模式发起（下载打开 / 上传回传）。
+   *  传输列表 UI 用此标记加标签，区分于普通下载/上传。 */
+  editMode?: boolean;
 }
 
 let _list = $state<Transfer[]>([]);
@@ -171,12 +174,7 @@ async function runTransfer(id: string): Promise<void> {
     // the next queued transfer here — otherwise this slot stays "taken" by
     // a failed transfer and the queue stalls until something else finishes.
     promoteNextQueued();
-    // 同样要通知 waitDone 等待者。
-    const resolver = _completionResolvers.get(id);
-    if (resolver) {
-      _completionResolvers.delete(id);
-      resolver();
-    }
+    resolvePending(id);
     return;
   }
   try {
@@ -215,12 +213,7 @@ async function runTransfer(id: string): Promise<void> {
     unlisten();
     if (mySftpId) invoke("sftp_close", { sftpId: mySftpId }).catch(() => {});
     promoteNextQueued();
-    // 通知 waitDone 等待者传输已终态（done/failed/cancelled）。
-    const resolver = _completionResolvers.get(id);
-    if (resolver) {
-      _completionResolvers.delete(id);
-      resolver();
-    }
+    resolvePending(id);
   }
 }
 
@@ -229,6 +222,7 @@ export async function startDownload(args: {
   remotePath: string;
   localPath: string;
   sizeHint?: number;
+  editMode?: boolean;
 }): Promise<string> {
   const id = crypto.randomUUID();
   const t: Transfer = {
@@ -241,6 +235,7 @@ export async function startDownload(args: {
     transferred: 0,
     status: "queued",
     startedAt: Date.now(),
+    editMode: args.editMode ?? false,
   };
   _list.unshift(t);
   tryDispatch(id);
@@ -251,6 +246,7 @@ export async function startUpload(args: {
   sessionId: string;
   localPath: string;
   remotePath: string;
+  editMode?: boolean;
 }): Promise<string> {
   const id = crypto.randomUUID();
   const t: Transfer = {
@@ -263,6 +259,7 @@ export async function startUpload(args: {
     transferred: 0,
     status: "queued",
     startedAt: Date.now(),
+    editMode: args.editMode ?? false,
   };
   _list.unshift(t);
   tryDispatch(id);
@@ -312,10 +309,23 @@ export async function cancel(id: string): Promise<void> {
   }
 }
 
+/// Resolve (and clear) any pending `waitDone` resolver for `id`.
+/// Called when a transfer reaches terminal state, is removed, or is cleared.
+function resolvePending(id: string): void {
+  const resolver = _completionResolvers.get(id);
+  if (resolver) {
+    _completionResolvers.delete(id);
+    resolver();
+  }
+}
+
 export function remove(id: string): void {
   _list = _list.filter((t) => t.id !== id);
+  resolvePending(id);
 }
 
 export function clearFinished(): void {
+  const removed = _list.filter((t) => t.status !== "running" && t.status !== "queued");
   _list = _list.filter((t) => t.status === "running" || t.status === "queued");
+  for (const t of removed) resolvePending(t.id);
 }

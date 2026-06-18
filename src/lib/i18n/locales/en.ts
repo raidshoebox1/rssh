@@ -54,6 +54,7 @@ const en = {
   "downloads.status.done": "Done",
   "downloads.status.failed": "Failed",
   "downloads.status.cancelled": "Cancelled",
+  "downloads.edit_mode": "Edit",
   "tab.context.search": "Search",
   "tab.context.snippets": "Snippets",
   "tab.context.sftp": "SFTP Browser",
