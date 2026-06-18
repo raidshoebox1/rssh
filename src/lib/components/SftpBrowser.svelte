@@ -344,7 +344,7 @@
     async function doOpenExternally(entry: RemoteEntry) {
         if (!sftpId || !meta.sessionId) return;
         try {
-            await editSessions.startEdit(sftpId, meta.sessionId, entryPath(entry), entry.name);
+            await editSessions.startEdit(meta.sessionId, entryPath(entry), entry.name);
         } catch (e: any) {
             toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
         }

@@ -287,9 +287,9 @@ pub fn run() {
             commands::sftp::sftp_stat,
             // SFTP "open with local program" edit mode (desktop only)
             #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_open_for_edit,
+            commands::sftp::sftp_prepare_edit,
             #[cfg(not(target_os = "android"))]
-            commands::sftp::sftp_accept_edit,
+            commands::sftp::sftp_start_edit_watch,
             #[cfg(not(target_os = "android"))]
             commands::sftp::sftp_cancel_edit,
             #[cfg(not(target_os = "android"))]

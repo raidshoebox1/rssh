@@ -89,6 +89,10 @@ export interface Transfer {
 
 let _list = $state<Transfer[]>([]);
 
+/// waitDone 的 resolver 集合。runTransfer 的 finally 块在传输终态时 resolve。
+/// key = transfer id，value = resolve 回调。
+const _completionResolvers = new Map<string, () => void>();
+
 interface ProgressPayload {
   transferred: number;
   total: number;
@@ -167,6 +171,12 @@ async function runTransfer(id: string): Promise<void> {
     // the next queued transfer here — otherwise this slot stays "taken" by
     // a failed transfer and the queue stalls until something else finishes.
     promoteNextQueued();
+    // 同样要通知 waitDone 等待者。
+    const resolver = _completionResolvers.get(id);
+    if (resolver) {
+      _completionResolvers.delete(id);
+      resolver();
+    }
     return;
   }
   try {
@@ -205,6 +215,12 @@ async function runTransfer(id: string): Promise<void> {
     unlisten();
     if (mySftpId) invoke("sftp_close", { sftpId: mySftpId }).catch(() => {});
     promoteNextQueued();
+    // 通知 waitDone 等待者传输已终态（done/failed/cancelled）。
+    const resolver = _completionResolvers.get(id);
+    if (resolver) {
+      _completionResolvers.delete(id);
+      resolver();
+    }
   }
 }
 
@@ -251,6 +267,18 @@ export async function startUpload(args: {
   _list.unshift(t);
   tryDispatch(id);
   return id;
+}
+
+/** 等待指定传输到达终态（done/failed/cancelled）。用于编辑回传等需要知道
+ *  传输结果的场景。若传输已完成或不存在，立即 resolve。 */
+export function waitDone(id: string): Promise<void> {
+  const t = find(id);
+  if (!t || t.status === "done" || t.status === "failed" || t.status === "cancelled") {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    _completionResolvers.set(id, resolve);
+  });
 }
 
 export async function retry(id: string): Promise<void> {

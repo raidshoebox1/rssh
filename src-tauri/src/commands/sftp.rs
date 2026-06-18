@@ -433,37 +433,38 @@ pub fn sftp_cancel_transfer(state: State<'_, AppState>, transfer_id: String) -> 
 
 // ─── 用本地程序打开远程文件（编辑模式）─────────────────────────────────────
 //
-// 流程：sftp_open_for_edit 下载文件到临时目录 → 用 opener 打开 → spawn
-// 一个轮询器每 2 秒检查 mtime，变化时 emit `sftp:file_changed:{edit_id}`。
-// 前端弹模态框 → sftp_accept_edit（上传回远程）或 sftp_cancel_edit（删临时文件）。
-// 轮询器通过 EditSession.cancel 控制；SSH 断连 / SFTP 面板关闭时前端调
-// sftp_cancel_edit 清理。
+// 流程（全复用 transfers 管道，下载/上传均在传输列表可见）：
+//   1. sftp_prepare_edit    生成 edit_id + 临时目录，注册 EditSession（不下载）
+//   2. 前端 transfers.startDownload（流式下载，传输列表可见，可取消）
+//   3. sftp_start_edit_watch 下载完成后调用：opener 打开 + spawn notify watcher
+//   4. 文件被外部编辑器保存 → watcher emit `sftp:file_changed:{edit_id}`
+//   5. 前端弹模态框 → transfers.startUpload（流式上传，传输列表可见，可取消）
+//      或 sftp_cancel_edit（删临时文件，停 watcher）
+//   SSH 断连 / SFTP 面板关闭 → sftp_cancel_edits_for_session 批量清理。
+//
+// EditSession 在步骤 1 创建、步骤 3 启动 watcher。cancel 在步骤 3 从 session
+// 克隆给 watcher；sftp_cancel_edit 置位后 watcher 下次循环退出。
 
-/// 一个活跃的"用本地程序打开"编辑会话。轮询器持有 cancel 的克隆，
-/// sftp_cancel_edit 置位后轮询器下次循环退出。
+/// 一个活跃的"用本地程序打开"编辑会话。watcher 持有 cancel 的克隆，
+/// sftp_cancel_edit 置位后 watcher 下次循环退出。
 #[cfg(not(target_os = "android"))]
 pub struct EditSession {
     /// 临时文件本地路径（{temp}/rssh-edit/{edit_id}/{filename}）。
     pub local_path: PathBuf,
-    /// 远端路径，回传时用。
-    pub remote_path: String,
-    /// 父 SSH session id，回传时新开 SFTP channel。
+    /// 父 SSH session id，sftp_cancel_edits_for_session 按它匹配批量清理。
     pub session_id: String,
-    /// 停止轮询器。
+    /// 停止 watcher。
     pub cancel: Arc<AtomicBool>,
 }
 
 #[cfg(not(target_os = "android"))]
 impl EditSession {
-    fn new(local_path: PathBuf, remote_path: String, session_id: String) -> (Self, Arc<AtomicBool>) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let session = Self {
+    fn new(local_path: PathBuf, session_id: String) -> Self {
+        Self {
             local_path,
-            remote_path,
             session_id,
-            cancel: cancel.clone(),
-        };
-        (session, cancel)
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -616,7 +617,7 @@ fn remote_filename(remote_path: &str) -> String {
     }
 }
 
-/// `sftp_open_for_edit` 的返回值：edit_id + 本地临时路径。
+/// `sftp_prepare_edit` 的返回值：edit_id + 本地临时路径。
 #[cfg(not(target_os = "android"))]
 #[derive(serde::Serialize)]
 pub struct OpenForEditResult {
@@ -624,49 +625,25 @@ pub struct OpenForEditResult {
     pub local_path: String,
 }
 
-/// 用本地程序打开远程文件。下载到 {temp}/rssh-edit/{edit_id}/{filename}，
-/// 用 opener 打开，spawn 轮询器检测后续修改。
-///
-/// 用系统默认程序打开。`session_id` 是父 SSH session id，用于回传时新开 SFTP channel。
-/// 流式下载带 100 MB 硬上限，防止恶意/误操作导致 OOM。
+/// 准备编辑会话：生成 edit_id、创建临时目录、注册 EditSession。
+/// 不下载文件（由传输系统的 startDownload 负责）、不打开文件（由
+/// sftp_start_edit_watch 负责）。返回 edit_id 和本地临时路径，前端用
+/// local_path 调 transfers.startDownload。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_open_for_edit(
-    app: AppHandle,
+pub async fn sftp_prepare_edit(
     state: State<'_, AppState>,
-    sftp_id: String,
     session_id: String,
     remote_path: String,
 ) -> AppResult<OpenForEditResult> {
-    let sftp = get_sftp(&state, &sftp_id)?;
-
     let edit_id = uuid::Uuid::new_v4().to_string();
     let filename = remote_filename(&remote_path);
     let temp_dir = std::env::temp_dir().join("rssh-edit").join(&edit_id);
     tokio::fs::create_dir_all(&temp_dir).await?;
     let local_path = temp_dir.join(&filename);
 
-    // 流式下载带硬上限，避免全量入内存（OOM 防护）。
-    // download_to_path 用 .part + rename 原子写入，失败不污染 local_path。
-    const MAX_EDIT_FILE_SIZE: u64 = 100 * 1024 * 1024;
-    sftp.download_to_path(&remote_path, &local_path, MAX_EDIT_FILE_SIZE)
-        .await?;
-
-    // 用 opener 以系统默认程序打开。open_path 要求 path: impl Into<String>，
-    // PathBuf 不直接 Into<String>，所以转成 String 传入。
-    let local_path_str = local_path.to_string_lossy().into_owned();
-    let open_result = app.opener().open_path(local_path_str, None::<String>);
-    if let Err(e) = open_result {
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-        return Err(AppError::other(
-            "sftp_edit_open_failed",
-            json!({ "err": e.to_string() }),
-        ));
-    }
-
-    let (session, cancel) = EditSession::new(local_path.clone(), remote_path, session_id);
+    let session = EditSession::new(local_path.clone(), session_id);
     locked(&state.edit_sessions)?.insert(edit_id.clone(), session);
-    poll_file_changes(app, edit_id.clone(), local_path.clone(), cancel);
 
     Ok(OpenForEditResult {
         edit_id,
@@ -674,43 +651,40 @@ pub async fn sftp_open_for_edit(
     })
 }
 
-/// 接受外部编辑器的修改：读取本地临时文件 → 新开 SFTP channel 上传回远端。
-/// 不移除 EditSession —— 用户可能再次保存，轮询器继续跑。
+/// 下载完成后调用：用 opener 打开本地文件，启动 notify watcher 监听后续修改。
+/// 若 EditSession 已被 sftp_cancel_edit 清理（SFTP 面板关闭等），返回 not_found。
+/// opener 打开失败时清理 EditSession + 临时目录后返回错误。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub async fn sftp_accept_edit(
+pub async fn sftp_start_edit_watch(
+    app: AppHandle,
     state: State<'_, AppState>,
     edit_id: String,
 ) -> AppResult<()> {
-    let (local_path, remote_path, session_id) = {
+    let (local_path, cancel) = {
         let sessions = locked(&state.edit_sessions)?;
         let s = sessions
             .get(&edit_id)
             .ok_or_else(|| AppError::not_found("sftp_edit_not_found", json!({})))?;
-        (s.local_path.clone(), s.remote_path.clone(), s.session_id.clone())
+        (s.local_path.clone(), s.cancel.clone())
     };
 
-    // 新开 SFTP channel（不复用 SftpBrowser 的 sftp_id，它可能已关闭）。
-    let ssh_handle = {
-        let sessions = locked(&state.sessions)?;
-        sessions
-            .get(&session_id)
-            .ok_or_else(|| AppError::not_found("ssh_session_not_found", json!({})))?
-            .ssh_handle()
-            .clone()
-    };
-    let parent = session_id.clone();
-    let sftp = crate::ssh::client::run_blocking_ssh(move || async move {
-        SftpHandle::from_handle(&ssh_handle, parent).await
-    })
-    .await?;
+    // 用 opener 以系统默认程序打开。open_path 要求 path: impl Into<String>，
+    // PathBuf 不直接 Into<String>，所以转成 String 传入。
+    let local_path_str = local_path.to_string_lossy().into_owned();
+    if let Err(e) = app.opener().open_path(local_path_str, None::<String>) {
+        // 打开失败 → 清理 EditSession + 临时目录。
+        if let Some(parent) = local_path.parent() {
+            let _ = tokio::fs::remove_dir_all(parent).await;
+        }
+        locked(&state.edit_sessions)?.remove(&edit_id);
+        return Err(AppError::other(
+            "sftp_edit_open_failed",
+            json!({ "err": e.to_string() }),
+        ));
+    }
 
-    // 读取本地临时文件 → 上传回远端。sftp 在此作用域结束后 drop，自动关闭临时 channel。
-    let data = tokio::fs::read(&local_path)
-        .await
-        .map_err(|e| AppError::other("sftp_edit_read_failed", json!({ "err": e.to_string() })))?;
-    sftp.upload(&remote_path, &data).await?;
-
+    poll_file_changes(app, edit_id, local_path, cancel);
     Ok(())
 }
 

@@ -1,12 +1,15 @@
 /**
  * "用本地程序打开"编辑会话 store。
  *
- * 后端 sftp_open_for_edit 下载远程文件到临时目录、用 opener 打开、spawn
- * 一个 notify watcher。文件被外部编辑器保存时后端 emit `sftp:file_changed:{edit_id}`，
- * 并通过 request_user_attention 把窗口拉到前台 + 闪烁任务栏图标；本 store
- * 监听该事件、把对应 session 标 pendingChange=true 让 SftpBrowser 弹模态框。
- * 用户点"上传" → sftp_accept_edit 回传远端；点"取消" → 清 pendingChange（不回传）。
- * SFTP 面板关闭 / SSH 断连 → cancelAllForSession 清理所有相关会话。
+ * 全流程复用 transfers 管道（下载/上传均在传输列表可见，流式、可取消）：
+ *   1. sftp_prepare_edit    生成 edit_id + 临时目录，注册 EditSession（不下载）
+ *   2. transfers.startDownload  流式下载到临时目录（传输列表可见）
+ *   3. 下载完成 → sftp_start_edit_watch  opener 打开 + notify watcher
+ *   4. 文件被外部编辑器保存 → 后端 emit sftp:file_changed:{edit_id}
+ *      → 前端设 pendingChange=true，弹模态框
+ *   5. 用户点"上传" → transfers.startUpload  流式上传回远端（传输列表可见）
+ *      用户点"取消" → dismissChange（清 pendingChange，不回传）
+ *   SFTP 面板关闭 / SSH 断连 → cancelAllForSession 清理所有相关会话。
  *
  * 跟 transfers store 一样是模块级 $state，不在组件内建全局状态（R8）。
  */
@@ -14,10 +17,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { errMsg, t } from "../i18n/index.svelte.ts";
 import { toast } from "./toast.svelte.ts";
+import * as transfers from "./transfers.svelte.ts";
 
 export interface EditSession {
     editId: string;
     localPath: string;
+    /** 远端完整路径，上传时用（transfers.startUpload 需要）。 */
+    remotePath: string;
     remoteName: string;
     /** 父 SSH session id，用于 cancelAllForSession 匹配。 */
     sessionId: string;
@@ -35,62 +41,112 @@ function find(editId: string): EditSession | undefined {
 }
 
 /**
- * 用本地程序打开远程文件。下载 → 打开 → 开始轮询。
- * @param sftpId    当前 SftpBrowser 的 SFTP channel id
- * @param sessionId 父 SSH session id（回传时新开 SFTP channel）
+ * 用本地程序打开远程文件。流程：
+ *   prepare_edit → transfers.startDownload → waitDone → start_edit_watch
+ * 下载失败/取消/编辑会话已被取消时静默清理，不弹模态框。
+ * @param sessionId 父 SSH session id（传输系统开自己的 SFTP channel）
  * @param remotePath 远端文件完整路径
  * @param remoteName 文件名（用于 UI 显示）
  */
 export async function startEdit(
-    sftpId: string,
     sessionId: string,
     remotePath: string,
     remoteName: string,
 ): Promise<void> {
-    const result = await invoke<{ edit_id: string; local_path: string }>(
-        "sftp_open_for_edit",
-        { sftpId, sessionId, remotePath },
+    // 阶段 1: 后端创建临时目录 + 注册 EditSession
+    const { edit_id, local_path } = await invoke<{ edit_id: string; local_path: string }>(
+        "sftp_prepare_edit",
+        { sessionId, remotePath },
     );
 
     const session: EditSession = {
-        editId: result.edit_id,
-        localPath: result.local_path,
+        editId: edit_id,
+        localPath: local_path,
+        remotePath,
         remoteName,
         sessionId,
         pendingChange: false,
     };
     _list = [..._list, session];
 
-    // 监听 file_changed / file_deleted。
-    // 窗口激活（unminimize + set_focus + request_user_attention）已由后端
-    // poll_file_changes 在 emit 之前完成，前端只需设置 pendingChange 弹模态框。
-    const unlistenChanged = await listen(`sftp:file_changed:${result.edit_id}`, () => {
-        const s = find(result.edit_id);
-        if (s && !s.pendingChange) {
-            s.pendingChange = true;
+    // 阶段 2: 通过传输系统下载（传输列表可见，流式，可取消）
+    const transferId = await transfers.startDownload({
+        sessionId,
+        remotePath,
+        localPath: local_path,
+    });
+
+    // 阶段 3: 下载完成后打开文件 + 启动监听
+    void transfers.waitDone(transferId).then(async () => {
+        // 编辑会话可能已被取消（SFTP 面板关闭等）→ 静默跳过
+        if (!find(edit_id)) return;
+        const tr = transfers.list().find((x) => x.id === transferId);
+        if (!tr || tr.status !== "done") {
+            // 下载失败/取消 → 清理后端 EditSession + 临时目录
+            await invoke("sftp_cancel_edit", { editId: edit_id }).catch(() => {});
+            _list = _list.filter((s) => s.editId !== edit_id);
+            if (tr && tr.status === "failed") {
+                toast.error(`${t("sftp.edit.open_failed")}: ${tr.error ?? ""}`);
+            }
+            return;
         }
-    });
-    const unlistenDeleted = await listen(`sftp:file_deleted:${result.edit_id}`, () => {
-        // 临时文件被删除（用户手动删 / 外部程序清理）→ 自动取消，不回传。
-        void cancelEdit(result.edit_id);
-        toast.info(t("sftp.edit.deleted", { name: remoteName }));
-    });
-    _unlisteners.set(result.edit_id, () => {
-        unlistenChanged();
-        unlistenDeleted();
+        // 下载成功 → 打开文件 + 启动 notify watcher
+        try {
+            await invoke("sftp_start_edit_watch", { editId: edit_id });
+        } catch (e: any) {
+            await invoke("sftp_cancel_edit", { editId: edit_id }).catch(() => {});
+            _list = _list.filter((s) => s.editId !== edit_id);
+            toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
+            return;
+        }
+        // 注册 file_changed / file_deleted 监听。
+        // 窗口激活（unminimize + set_focus + request_user_attention）已由后端
+        // poll_file_changes 在 emit 之前完成，前端只需设置 pendingChange 弹模态框。
+        let unlistenChanged: UnlistenFn;
+        let unlistenDeleted: UnlistenFn;
+        try {
+            unlistenChanged = await listen(`sftp:file_changed:${edit_id}`, () => {
+                const s = find(edit_id);
+                if (s && !s.pendingChange) {
+                    s.pendingChange = true;
+                }
+            });
+            unlistenDeleted = await listen(`sftp:file_deleted:${edit_id}`, () => {
+                // 临时文件被删除（用户手动删 / 外部程序清理）→ 自动取消，不回传。
+                void cancelEdit(edit_id);
+                toast.info(t("sftp.edit.deleted", { name: remoteName }));
+            });
+        } catch (e: any) {
+            // listen 失败（Tauri 事件系统异常）→ 清理，无法检测后续变更。
+            await invoke("sftp_cancel_edit", { editId: edit_id }).catch(() => {});
+            _list = _list.filter((s) => s.editId !== edit_id);
+            toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
+            return;
+        }
+        _unlisteners.set(edit_id, () => {
+            unlistenChanged();
+            unlistenDeleted();
+        });
     });
 }
 
-/** 用户点"上传"：回传远端，清 pendingChange。轮询器继续跑（用户可能再保存）。 */
+/** 用户点"上传"：通过传输系统上传回远端，清 pendingChange。
+ *  轮询器继续跑（用户可能再次保存）。失败弹 toast。 */
 export async function acceptEdit(editId: string): Promise<void> {
     const s = find(editId);
     if (!s) return;
-    try {
-        await invoke("sftp_accept_edit", { editId });
-        s.pendingChange = false;
-    } catch (e: any) {
-        toast.error(`${t("sftp.edit.upload_failed")}: ${errMsg(e)}`);
-    }
+    s.pendingChange = false;
+    const id = await transfers.startUpload({
+        sessionId: s.sessionId,
+        localPath: s.localPath,
+        remotePath: s.remotePath,
+    });
+    void transfers.waitDone(id).then(() => {
+        const tr = transfers.list().find((x) => x.id === id);
+        if (tr && tr.status === "failed") {
+            toast.error(`${t("sftp.edit.upload_failed")}: ${tr.error ?? ""}`);
+        }
+    });
 }
 
 /** 用户点"取消"（模态框）：清 pendingChange，不回传。轮询器继续跑。 */
