@@ -85,9 +85,16 @@ export interface Transfer {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** true = initiated by the "open with local program" edit mode (download to
+   *  open / upload back). The transfer list UI uses this to badge the entry. */
+  editMode?: boolean;
 }
 
 let _list = $state<Transfer[]>([]);
+
+/// Pending resolvers for waitDone. runTransfer's finally block resolves them
+/// when the transfer reaches a terminal state. Key = transfer id, value = resolver.
+const _completionResolvers = new Map<string, () => void>();
 
 interface ProgressPayload {
   transferred: number;
@@ -167,6 +174,7 @@ async function runTransfer(id: string): Promise<void> {
     // the next queued transfer here — otherwise this slot stays "taken" by
     // a failed transfer and the queue stalls until something else finishes.
     promoteNextQueued();
+    resolvePending(id);
     return;
   }
   try {
@@ -205,6 +213,7 @@ async function runTransfer(id: string): Promise<void> {
     unlisten();
     if (mySftpId) invoke("sftp_close", { sftpId: mySftpId }).catch(() => {});
     promoteNextQueued();
+    resolvePending(id);
   }
 }
 
@@ -213,6 +222,7 @@ export async function startDownload(args: {
   remotePath: string;
   localPath: string;
   sizeHint?: number;
+  editMode?: boolean;
 }): Promise<string> {
   const id = crypto.randomUUID();
   const t: Transfer = {
@@ -225,6 +235,7 @@ export async function startDownload(args: {
     transferred: 0,
     status: "queued",
     startedAt: Date.now(),
+    editMode: args.editMode ?? false,
   };
   _list.unshift(t);
   tryDispatch(id);
@@ -235,6 +246,7 @@ export async function startUpload(args: {
   sessionId: string;
   localPath: string;
   remotePath: string;
+  editMode?: boolean;
 }): Promise<string> {
   const id = crypto.randomUUID();
   const t: Transfer = {
@@ -247,10 +259,24 @@ export async function startUpload(args: {
     transferred: 0,
     status: "queued",
     startedAt: Date.now(),
+    editMode: args.editMode ?? false,
   };
   _list.unshift(t);
   tryDispatch(id);
   return id;
+}
+
+/** Wait for a transfer to reach a terminal state (done/failed/cancelled).
+ *  Used by edit-mode upload-back and other flows that need the transfer result.
+ *  Resolves immediately if the transfer is already done or missing. */
+export function waitDone(id: string): Promise<void> {
+  const t = find(id);
+  if (!t || t.status === "done" || t.status === "failed" || t.status === "cancelled") {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    _completionResolvers.set(id, resolve);
+  });
 }
 
 export async function retry(id: string): Promise<void> {
@@ -284,10 +310,23 @@ export async function cancel(id: string): Promise<void> {
   }
 }
 
+/// Resolve (and clear) any pending `waitDone` resolver for `id`.
+/// Called when a transfer reaches terminal state, is removed, or is cleared.
+function resolvePending(id: string): void {
+  const resolver = _completionResolvers.get(id);
+  if (resolver) {
+    _completionResolvers.delete(id);
+    resolver();
+  }
+}
+
 export function remove(id: string): void {
   _list = _list.filter((t) => t.id !== id);
+  resolvePending(id);
 }
 
 export function clearFinished(): void {
+  const removed = _list.filter((t) => t.status !== "running" && t.status !== "queued");
   _list = _list.filter((t) => t.status === "running" || t.status === "queued");
+  for (const t of removed) resolvePending(t.id);
 }
