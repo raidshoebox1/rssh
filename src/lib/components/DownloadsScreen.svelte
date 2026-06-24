@@ -92,6 +92,9 @@
 
                     <div class="name" title={item.kind === "download" ? item.remotePath : item.localPath}>
                         {basename(item.kind === "download" ? item.remotePath : item.localPath)}
+                        {#if item.editMode}
+                            <span class="edit-badge">{t("downloads.edit_mode")}</span>
+                        {/if}
                     </div>
                     <div class="path" title={item.kind === "download" ? item.localPath : item.remotePath}>
                         → {item.kind === "download" ? item.localPath : item.remotePath}
@@ -291,6 +294,19 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         min-width: 0;
+    }
+
+    .edit-badge {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 500;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+        color: var(--accent);
+        vertical-align: middle;
+        white-space: nowrap;
     }
 
     .path {
