@@ -931,6 +931,8 @@ const en = {
   "settings.shell.right_click_menu": "System menu (default)",
   "settings.shell.right_click_paste": "Paste",
   "settings.shell.right_click_copy_paste": "Copy if selected, otherwise paste",
+  "settings.shell.ctrl_right_click_menu": "{mod}+Right-click opens menu",
+  "settings.shell.ctrl_right_click_menu_desc": "When right-click is set to \u201cPaste\u201d or \u201cCopy if selected, otherwise paste\u201d, hold {mod} and right-click to open the system menu.",
   // CLI settings
   "settings.cli.installed": "Installed",
   "settings.cli.installed_to": "Installed to {path}",
