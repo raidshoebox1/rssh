@@ -625,7 +625,6 @@ export async function setCtrlRightClickMenu(v: boolean) {
   _crcmLoaded = true;
   await invoke("set_setting", { key: "ctrl_right_click_menu", value: String(v) });
 }
-}
 
 /* ─── Per-tab search pulse (context menu → TerminalPane.openSearch) ─── */
 let _searchRequest = $state<{ tabId: string; n: number } | null>(null);
