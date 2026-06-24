@@ -23,6 +23,14 @@ pub struct AppState {
     #[cfg(not(target_os = "android"))]
     pub serial_sessions: Mutex<HashMap<String, SerialHandle>>,
     pub sftp_sessions: Mutex<HashMap<String, Arc<SftpHandle>>>,
+    /// Active "open with local program" edit sessions: edit_id → EditSession.
+    /// When the user saves the file in an external editor, a backend notify
+    /// watcher emits `sftp:file_changed:{edit_id}` and the frontend shows a
+    /// modal asking whether to upload it back. When the SFTP panel closes or
+    /// the SSH session drops, the frontend calls `sftp_cancel_edits_for_session`
+    /// to clean up entries and delete the temp files.
+    #[cfg(not(target_os = "android"))]
+    pub edit_sessions: Mutex<HashMap<String, crate::commands::sftp::EditSession>>,
     /// 进行中的 SFTP 传输 cancel flag：transfer_id → AtomicBool。
     /// 用户在传输页点"取消"会把对应位置 1，streaming 循环每个 chunk 查一次，
     /// 命中即提前 Err 退出。传输结束（成功 / 失败 / 取消）都从 map 里移除。

@@ -1,10 +1,13 @@
 <script lang="ts">
     import {onDestroy, onMount, tick} from "svelte";
     import {invoke} from "@tauri-apps/api/core";
+    import {listen, type UnlistenFn} from "@tauri-apps/api/event";
     import * as app from "../stores/app.svelte.ts";
     import * as transfers from "../stores/transfers.svelte.ts";
+    import * as editSessions from "../stores/edit-sessions.svelte.ts";
     import type {RemoteEntry} from "../stores/app.svelte.ts";
     import { errMsg, t } from "../i18n/index.svelte.ts";
+    import { toast } from "../stores/toast.svelte.ts";
 
     /** Mirrors the backend WalkEntry; rel_path is always '/'-separated. */
     interface WalkEntry { rel_path: string; size: number; }
@@ -61,6 +64,12 @@
     /** Delete confirm state. */
     let deleteEntry = $state<RemoteEntry | null>(null);
 
+    /** Large-file confirmation dialog state: shown for files > 10 MB. */
+    let largeFileEntry = $state<RemoteEntry | null>(null);
+
+    /** Tauri event unlisteners (SSH close + edit session related). */
+    let unlisteners: UnlistenFn[] = [];
+
     /** Renames the input after mount so it can receive focus. */
     let renameInputEl: HTMLInputElement | undefined;
 
@@ -90,10 +99,23 @@
             error = errMsg(e);
             loading = false;
         }
+
+        // On SSH disconnect, cancel every edit session for this session (stop
+        // watchers + delete temp files).
+        if (meta.sessionId) {
+            try {
+                unlisteners.push(await listen(`ssh:close:${meta.sessionId}`, () => {
+                    void editSessions.cancelAllForSession(meta.sessionId);
+                }));
+            } catch { /* headless / no sessionId */ }
+        }
     });
 
     onDestroy(() => {
         if (sftpId) invoke("sftp_close", {sftpId});
+        // SFTP panel closed → cancel every edit session (stop watchers + delete temp files).
+        if (meta.sessionId) void editSessions.cancelAllForSession(meta.sessionId);
+        unlisteners.forEach((u) => { try { u(); } catch {} });
     });
 
     async function listDir(path: string) {
@@ -302,6 +324,44 @@
         const path = entryPath(entry).replace(/[\x00-\x1f\x7f]/g, "");
         app.sendTextToActiveTerminal(path);
         closeCtxMenu();
+    }
+
+    /** 10 MB — above this, show a confirmation dialog. The user can still open
+     *  the file after confirming. */
+    const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024;
+
+    /** "Open": open the remote file with the system default program, entering
+     *  edit mode. */
+    async function openExternally(entry: RemoteEntry) {
+        if (!sftpId || !meta.sessionId) return;
+        // Don't open directories (the context menu gates this, but be defensive).
+        if (entry.is_dir) return;
+        // > 10 MB → confirm.
+        if (entry.size > LARGE_FILE_THRESHOLD) {
+            largeFileEntry = entry;
+            return;
+        }
+        await doOpenExternally(entry);
+    }
+
+    async function doOpenExternally(entry: RemoteEntry) {
+        if (!sftpId || !meta.sessionId) return;
+        try {
+            await editSessions.startEdit(meta.sessionId, entryPath(entry), entry.name);
+        } catch (e: any) {
+            toast.error(`${t("sftp.edit.open_failed")}: ${errMsg(e)}`);
+        }
+        closeCtxMenu();
+    }
+
+    /** User clicked "Upload" in the "file changed" modal. */
+    async function acceptEditChange(editId: string) {
+        await editSessions.acceptEdit(editId);
+    }
+
+    /** User clicked "Cancel" in the "file changed" modal. */
+    function dismissEditChange(editId: string) {
+        editSessions.dismissChange(editId);
     }
 
     /** Queue downloads for a set of entries into a local directory.
@@ -569,6 +629,16 @@
                     class:dir={e.is_dir}
                     class:selected={selected.has(e.name)}
                     oncontextmenu={(ev) => onContextMenu(ev, e)}
+                    ondblclick={(ev) => {
+                        if ((ev.target as HTMLElement).tagName === 'INPUT') return;
+                        if (!e.is_dir && !app.isMobile) openExternally(e);
+                    }}
+                    onmousedown={(ev) => {
+                        if (ev.button === 1) {
+                            ev.preventDefault();
+                            copyPathToTerminal(e);
+                        }
+                    }}
                 >
                     <span class="cell-check">
                         <input
@@ -601,6 +671,10 @@
          class:ready={ctxReady}
          bind:this={ctxMenuEl}
          style="left: {ctxMenu.x + ctxDx}px; top: {ctxMenu.y + ctxDy}px;">
+        {#if !ctxMenu!.entry.is_dir && !app.isMobile}
+            <button class="ctx-item" onclick={() => openExternally(ctxMenu!.entry)}>{t("sftp.ctx.open")}</button>
+            <div class="ctx-sep"></div>
+        {/if}
         <button class="ctx-item" onclick={() => downloadEntry(ctxMenu!.entry)}>{t("sftp.ctx.download")}</button>
         <button class="ctx-item" onclick={() => confirmDelete(ctxMenu!.entry)}>{t("sftp.ctx.delete")}</button>
         <button class="ctx-item" onclick={() => startRename(ctxMenu!.entry)}>{t("sftp.ctx.rename")}</button>
@@ -680,6 +754,37 @@
         </div>
     </div>
 {/if}
+
+{#if largeFileEntry}
+    <div class="modal-overlay" onclick={() => { largeFileEntry = null; }}>
+        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
+            <p class="modal-text">{t("sftp.edit.large_file_warn", { size: formatSize(largeFileEntry.size) })}</p>
+            <div class="modal-actions">
+                <button class="btn btn-sm" onclick={() => { largeFileEntry = null; }}>{t("common.cancel")}</button>
+                <button class="btn btn-sm btn-accent" onclick={() => {
+                    const e = largeFileEntry;
+                    largeFileEntry = null;
+                    if (e) void doOpenExternally(e);
+                }}>{t("sftp.ctx.open")}</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+{#each editSessions.editSessions() as s (s.editId)}
+    {#if s.pendingChange}
+        <div class="modal-overlay">
+            <div class="modal-card" onclick={(e) => e.stopPropagation()}>
+                <p class="modal-title">{t("sftp.edit.changed_title")}</p>
+                <p class="modal-text">{t("sftp.edit.changed_body", { name: s.remoteName })}</p>
+                <div class="modal-actions">
+                    <button class="btn btn-sm" onclick={() => dismissEditChange(s.editId)}>{t("common.cancel")}</button>
+                    <button class="btn btn-sm btn-accent" onclick={() => acceptEditChange(s.editId)}>{t("sftp.edit.accept")}</button>
+                </div>
+            </div>
+        </div>
+    {/if}
+{/each}
 
 <style>
     .sftp {

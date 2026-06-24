@@ -277,6 +277,11 @@ export function installTauriShim(): void {
         "plugin:window|set_always_on_top": async () => {},
         "plugin:window|set_decorations": async () => {},
         "plugin:window|is_decorated": async () => true,
+        // Bringing the window to the foreground when a file-changed modal
+        // appears — off-Tauri there's no native window, so no-op.
+        "plugin:window|unminimize": async () => {},
+        "plugin:window|set_focus": async () => {},
+        "plugin:window|request_user_attention": async () => {},
     };
 
     // Running inside the IDEA plugin's JCEF host? The bridge injects __RSSH_PICK__;
