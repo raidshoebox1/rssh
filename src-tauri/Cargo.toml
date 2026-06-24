@@ -95,6 +95,10 @@ libc = "0.2"
 # positive OS list instead of treating every non-mobile target as a desktop.
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 portable-pty = "0.8"
+# Filesystem event watching (inotify/FSEvents/ReadDirectoryChangesW) — used by
+# the "open remote file with local program" edit mode for instant change
+# detection instead of polling.
+notify = "6"
 # Serial console transport — a 3rd byte-stream alongside SSH/PTY. macOS uses
 # IOKit and Windows uses the Win32 API (no extra system dep); Linux links
 # libudev for port enumeration, so Linux CI/packaging needs `libudev-dev` at
