@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
 use tauri::State;
@@ -482,6 +482,12 @@ impl EditSession {
     }
 }
 
+/// Throttle window-attention requests so a rapid burst of saves doesn't flash /
+/// bounce the taskbar icon repeatedly. 2 s is enough to coalesce typical
+/// auto-save / multi-step save bursts while still feeling immediate.
+#[cfg(not(target_os = "android"))]
+static LAST_ATTENTION: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
 /// Bring all app windows to the foreground + flash the taskbar icon (Windows) /
 /// Dock bounce (macOS) / urgency hint (Linux). `request_user_attention(Critical)`
 /// is the OS-sanctioned "request attention" cue and bypasses focus-stealing
@@ -489,6 +495,19 @@ impl EditSession {
 #[cfg(not(target_os = "android"))]
 fn bring_window_to_front(app: &AppHandle) {
     use tauri::Manager;
+
+    const ATTENTION_COOLDOWN: Duration = Duration::from_secs(2);
+    let now = Instant::now();
+    {
+        let mut last = LAST_ATTENTION.lock().unwrap();
+        if let Some(t) = *last {
+            if now.duration_since(t) < ATTENTION_COOLDOWN {
+                return;
+            }
+        }
+        *last = Some(now);
+    }
+
     for (_, win) in app.webview_windows() {
         let _ = win.unminimize();
         let _ = win.set_focus();
@@ -717,12 +736,15 @@ pub async fn sftp_start_edit_watch(
 /// remove the session from the map.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn sftp_cancel_edit(state: State<'_, AppState>, edit_id: String) -> AppResult<()> {
+pub async fn sftp_cancel_edit(
+    state: State<'_, AppState>,
+    edit_id: String,
+) -> AppResult<()> {
     let session = locked(&state.edit_sessions)?.remove(&edit_id);
     if let Some(s) = session {
         s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(parent) = s.local_path.parent() {
-            let _ = std::fs::remove_dir_all(parent);
+        if let Some(parent) = s.local_path.parent().map(|p| p.to_path_buf()) {
+            let _ = tokio::fs::remove_dir_all(parent).await;
         }
     }
     Ok(())
@@ -732,22 +754,23 @@ pub fn sftp_cancel_edit(state: State<'_, AppState>, edit_id: String) -> AppResul
 /// panel closes or the SSH session drops).
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-pub fn sftp_cancel_edits_for_session(
+pub async fn sftp_cancel_edits_for_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> AppResult<()> {
-    let mut sessions = locked(&state.edit_sessions)?;
-    let keys: Vec<String> = sessions
-        .iter()
-        .filter(|(_, s)| s.session_id == session_id)
-        .map(|(k, _)| k.clone())
-        .collect();
-    for k in keys {
-        if let Some(s) = sessions.remove(&k) {
-            s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            if let Some(parent) = s.local_path.parent() {
-                let _ = std::fs::remove_dir_all(parent);
-            }
+    let to_cancel: Vec<EditSession> = {
+        let mut sessions = locked(&state.edit_sessions)?;
+        let keys: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.session_id == session_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.into_iter().filter_map(|k| sessions.remove(&k)).collect()
+    };
+    for s in to_cancel {
+        s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(parent) = s.local_path.parent().map(|p| p.to_path_buf()) {
+            let _ = tokio::fs::remove_dir_all(parent).await;
         }
     }
     Ok(())

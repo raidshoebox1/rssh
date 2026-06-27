@@ -30,6 +30,8 @@ export interface EditSession {
     sessionId: string;
     /** true = file changed, modal is showing. */
     pendingChange: boolean;
+    /** true = a new change arrived while the modal was already open. */
+    hasNewChange?: boolean;
 }
 
 let _list = $state<EditSession[]>([]);
@@ -111,7 +113,12 @@ export async function startEdit(
         try {
             unlistenChanged = await listen(`sftp:file_changed:${edit_id}`, () => {
                 const s = find(edit_id);
-                if (s && !s.pendingChange) {
+                if (!s) return;
+                if (s.pendingChange) {
+                    // A newer save happened while the modal was already open.
+                    // Re-show it once the user dismisses the current one.
+                    s.hasNewChange = true;
+                } else {
                     s.pendingChange = true;
                 }
             });
@@ -143,6 +150,7 @@ export async function acceptEdit(editId: string): Promise<void> {
     const s = find(editId);
     if (!s) return;
     s.pendingChange = false;
+    s.hasNewChange = false;
     const id = await transfers.startUpload({
         sessionId: s.sessionId,
         localPath: s.localPath,
@@ -160,10 +168,17 @@ export async function acceptEdit(editId: string): Promise<void> {
 }
 
 /** User clicks "Cancel" (modal): clear pendingChange, do NOT upload. The
- *  watcher keeps running. */
+ *  watcher keeps running. If a newer save arrived while the modal was open,
+ *  re-show it immediately so the user is aware of the latest change. */
 export function dismissChange(editId: string): void {
     const s = find(editId);
-    if (s) s.pendingChange = false;
+    if (!s) return;
+    if (s.hasNewChange) {
+        s.pendingChange = true;
+        s.hasNewChange = false;
+    } else {
+        s.pendingChange = false;
+    }
 }
 
 /**
