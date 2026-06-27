@@ -83,6 +83,18 @@
     const someSelected = $derived(selected.size > 0 && selected.size < entries.length);
 
     onMount(async () => {
+        // Register the SSH disconnect listener first: if the connection drops
+        // very quickly (e.g. during the initial listDir), we still want the
+        // cleanup to run. The listener is cheap and has no side effects until
+        // the event actually fires.
+        if (meta.sessionId) {
+            try {
+                unlisteners.push(await listen(`ssh:close:${meta.sessionId}`, () => {
+                    void editSessions.cancelAllForSession(meta.sessionId);
+                }));
+            } catch { /* headless / no sessionId */ }
+        }
+
         try {
             let id: string;
             if (meta.sessionId) {
@@ -103,16 +115,6 @@
         } catch (e: any) {
             error = errMsg(e);
             loading = false;
-        }
-
-        // On SSH disconnect, cancel every edit session for this session (stop
-        // watchers + delete temp files).
-        if (meta.sessionId) {
-            try {
-                unlisteners.push(await listen(`ssh:close:${meta.sessionId}`, () => {
-                    void editSessions.cancelAllForSession(meta.sessionId);
-                }));
-            } catch { /* headless / no sessionId */ }
         }
     });
 
@@ -805,33 +807,29 @@
 {/if}
 
 {#if largeFileEntry}
-    <div class="modal-overlay" onclick={() => { largeFileEntry = null; }}>
-        <div class="modal-card" onclick={(e) => e.stopPropagation()}>
-            <p class="modal-text">{t("sftp.edit.large_file_warn", { size: formatSize(largeFileEntry.size) })}</p>
-            <div class="modal-actions">
-                <button class="btn btn-sm" onclick={() => { largeFileEntry = null; }}>{t("common.cancel")}</button>
-                <button class="btn btn-sm btn-accent" onclick={() => {
-                    const e = largeFileEntry;
-                    largeFileEntry = null;
-                    if (e) void doOpenExternally(e);
-                }}>{t("sftp.ctx.open")}</button>
-            </div>
+    <Modal onClose={() => { largeFileEntry = null; }} aria-labelledby="large-file-title">
+        <p class="modal-text" id="large-file-title">{t("sftp.edit.large_file_warn", { size: formatSize(largeFileEntry.size) })}</p>
+        <div class="modal-actions">
+            <button class="btn btn-sm" onclick={() => { largeFileEntry = null; }}>{t("common.cancel")}</button>
+            <button class="btn btn-sm btn-accent" onclick={() => {
+                const e = largeFileEntry;
+                largeFileEntry = null;
+                if (e) void doOpenExternally(e);
+            }}>{t("sftp.ctx.open")}</button>
         </div>
-    </div>
+    </Modal>
 {/if}
 
 {#each editSessions.editSessions() as s (s.editId)}
     {#if s.pendingChange}
-        <div class="modal-overlay">
-            <div class="modal-card" onclick={(e) => e.stopPropagation()}>
-                <p class="modal-title">{t("sftp.edit.changed_title")}</p>
-                <p class="modal-text">{t("sftp.edit.changed_body", { name: s.remoteName })}</p>
-                <div class="modal-actions">
-                    <button class="btn btn-sm" onclick={() => dismissEditChange(s.editId)}>{t("common.cancel")}</button>
-                    <button class="btn btn-sm btn-accent" onclick={() => acceptEditChange(s.editId)}>{t("sftp.edit.accept")}</button>
-                </div>
+        <Modal onClose={() => {}} aria-labelledby="edit-changed-title">
+            <p class="modal-title" id="edit-changed-title">{t("sftp.edit.changed_title")}</p>
+            <p class="modal-text">{t("sftp.edit.changed_body", { name: s.remoteName })}</p>
+            <div class="modal-actions">
+                <button class="btn btn-sm" onclick={() => dismissEditChange(s.editId)}>{t("common.cancel")}</button>
+                <button class="btn btn-sm btn-accent" onclick={() => acceptEditChange(s.editId)}>{t("sftp.edit.accept")}</button>
             </div>
-        </div>
+        </Modal>
     {/if}
 {/each}
 
