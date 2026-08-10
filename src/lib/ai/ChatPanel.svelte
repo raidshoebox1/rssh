@@ -98,6 +98,10 @@
         showClearDialog = false;
         clearDialogOwner = null;
         rollbackDialog = null;
+        // 右键菜单也属于越出 panel 边界的浮层：键盘切 tab（无 mousedown）不会
+        // 触发 BlockContextMenu 的 outside-click 关闭，这里兜底清掉，避免回到
+        // 这个 tab 时菜单还在旧坐标上挂着。
+        chatCtxMenu = null;
     });
 
     // 历史对话随当前 target（同一 tab 重连时 session id 会变）重新加载。
@@ -473,6 +477,9 @@
             document.removeEventListener("mousemove", onMove);
             document.removeEventListener("mouseup", stop);
             window.removeEventListener("blur", stop);
+            // Persist once on mouse-up — onMove only touches $state, matching
+            // the AI panel width gesture (setPanelWidth + commitPanelWidth).
+            ai.commitInputMaxHeight();
         }
 
         function onMove(ev: MouseEvent) {
@@ -490,9 +497,9 @@
         window.addEventListener("blur", stop);
     }
 
-    /** Double-click the handle: reset to the default height. */
+    /** Double-click the handle: reset to the default height (set + persist). */
     function resetInputHeight() {
-        ai.setInputMaxHeight(120);
+        ai.resetInputMaxHeight();
     }
 </script>
 
@@ -662,7 +669,7 @@
                      ondblclick={resetInputHeight}
                      role="separator"
                      aria-orientation="horizontal"
-                     title={t("ai.input.resize_hint")}></div>
+                     title={t("common.resize_hint")}></div>
             {/if}
             <textarea
                 bind:this={inputEl}
@@ -991,10 +998,12 @@
         flex-shrink: 0;
     }
     /* Draggable handle above the composer: pulls its max-height up/down.
-       Styled like the AI panel width grip (accent on hover) but horizontal. */
+       Styled like the AI panel width grip (accent on hover) but horizontal.
+       top:0 (not -3px) keeps the hit region inside .input-area so it can't
+       intercept text selection at the bottom of the chat scroll area. */
     .input-resize-handle {
         position: absolute;
-        left: 0; right: 0; top: -3px;
+        left: 0; right: 0; top: 0;
         height: 6px;
         cursor: row-resize;
         z-index: 10;
