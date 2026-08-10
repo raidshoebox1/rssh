@@ -48,6 +48,19 @@ export type AiPosition = "left" | "right";
 const POS_KEY = "ai_panel_position";
 const LEGACY_PANEL_WIDTH_KEY = "ai-panel-width";
 const MIN_PANEL_WIDTH = 280;
+/** Global AI composer height pref (max-height of the input textarea). Stored in
+ *  localStorage like POS_KEY — a per-user preference, not per-tab (R8: global
+ *  UI state belongs in the domain store, not component singletons). */
+const INPUT_MAX_HEIGHT_KEY = "ai-input-max-height";
+const INPUT_MAX_HEIGHT_DEFAULT = 120;
+function loadInputMaxHeight(): number {
+  try {
+    const v = Number.parseInt(localStorage.getItem(INPUT_MAX_HEIGHT_KEY) ?? "", 10);
+    return Number.isFinite(v) && v >= 48 ? v : INPUT_MAX_HEIGHT_DEFAULT;
+  } catch {
+    return INPUT_MAX_HEIGHT_DEFAULT;
+  }
+}
 function loadPos(): AiPosition {
   const v = localStorage.getItem(POS_KEY);
   return v === "left" || v === "right" ? v : "right";
@@ -201,6 +214,21 @@ export function position() { return _position; }
 export function setPosition(p: AiPosition) {
   _position = p;
   localStorage.setItem(POS_KEY, p);
+}
+
+// ─── Composer height (global pref, see INPUT_MAX_HEIGHT_KEY) ─────
+
+let _inputMaxHeight = $state<number>(loadInputMaxHeight());
+
+export function inputMaxHeight() { return _inputMaxHeight; }
+export function setInputMaxHeight(px: number) {
+  if (!Number.isFinite(px) || px < 48) return;
+  _inputMaxHeight = Math.round(px);
+  try {
+    localStorage.setItem(INPUT_MAX_HEIGHT_KEY, String(_inputMaxHeight));
+  } catch (error) {
+    console.warn("[ai] persist input height:", error);
+  }
 }
 
 // ─── Open/close ───────────────────────────────────────────────────
