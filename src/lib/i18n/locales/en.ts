@@ -569,7 +569,6 @@ const en = {
   "ai.input.send": "Send",
   "ai.input.stop": "⏹ Stop",
   "ai.input.starting_short": "Starting…",
-  "ai.input.resize_hint": "Drag to resize the input box",
   "ai.session.ended_note": "Session ended",
   "ai.note.skill_loaded": "Loaded skill: {name}",
   "ai.note.command_blocked": "rssh blocked the command: {cmd} ({reason})",

@@ -235,18 +235,30 @@ export function setPosition(p: AiPosition) {
 }
 
 // ─── Composer height (global pref, see INPUT_MAX_HEIGHT_KEY) ─────
+// Mirrors setPanelWidth/commitPanelWidth: the live drag only touches $state
+// (60+ mousemoves/sec), and the localStorage write is deferred to mouse-up.
 
 let _inputMaxHeight = $state<number>(loadInputMaxHeight());
 
 export function inputMaxHeight() { return _inputMaxHeight; }
+/** In-memory update only — call during a drag for live feedback. Persist with
+ *  commitInputMaxHeight() on mouse-up, or use resetInputMaxHeight() for the
+ *  double-click reset (which both sets and persists). */
 export function setInputMaxHeight(px: number) {
   if (!Number.isFinite(px) || px < 48) return;
   _inputMaxHeight = Math.round(px);
+}
+export function commitInputMaxHeight() {
   try {
     localStorage.setItem(INPUT_MAX_HEIGHT_KEY, String(_inputMaxHeight));
   } catch (error) {
     console.warn("[ai] persist input height:", error);
   }
+}
+/** Double-click reset: restore the default and persist in one shot. */
+export function resetInputMaxHeight() {
+  _inputMaxHeight = INPUT_MAX_HEIGHT_DEFAULT;
+  commitInputMaxHeight();
 }
 
 // ─── Open/close ───────────────────────────────────────────────────
