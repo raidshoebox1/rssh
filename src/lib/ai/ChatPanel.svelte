@@ -1,5 +1,6 @@
 <script lang="ts">
     import * as ai from "./store.svelte.ts";
+    import * as app from "../stores/app.svelte.ts";
     import type { AiTargetKind, ChatItem, ConversationMeta } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
     import WebToolConfirmCard from "./WebToolConfirmCard.svelte";
@@ -10,6 +11,7 @@
     import AuditPanel from "./AuditPanel.svelte";
     import Modal from "../components/Modal.svelte";
     import DangerModeToggle from "./DangerModeToggle.svelte";
+    import BlockContextMenu, {type MenuItem} from "../components/BlockContextMenu.svelte";
     import { renderMarkdown } from "./markdown.ts";
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
@@ -354,6 +356,132 @@
             rollingBack = false;
         }
     }
+
+    // ─── Right-click context menu on AI output ────────────────────────────
+    /** Active context menu. `index` is the message item whose bubble the right
+     *  click landed in (null when clicking empty chat padding / on a user msg);
+     *  `selection` is the text currently selected in the document, used for the
+     *  copy / send-to-terminal items. */
+    let chatCtxMenu = $state<{ x: number; y: number; index: number | null; selection: string } | null>(null);
+
+    /** Close on outside click / Esc — BlockContextMenu already listens for this,
+     *  so here we only reset our own state when it fires onClose. */
+    function closeChatCtxMenu() { chatCtxMenu = null; }
+
+    /** Right-click on the chat area: only pop the menu when the pointer is over
+     *  an assistant bubble with a selection (raw markdown needs the bubble, copy
+     *  needs the selection — "no selection, no menu" keeps the gesture safe). */
+    function onChatContextMenu(e: MouseEvent) {
+        const sel = window.getSelection()?.toString() ?? "";
+        if (!sel) return;
+        const target = e.target as Element | null;
+        const bubble = target?.closest?.(".bubble.assistant.md");
+        if (!bubble) return;
+        const index = Number((bubble as HTMLElement).dataset.indexKey ?? -1);
+        // The extracted plain-text selection is what copy / send-to-terminal use;
+        // the raw markdown comes from the stored ChatItem via `index`.
+        e.preventDefault();
+        chatCtxMenu = { x: e.clientX, y: e.clientY, index: Number.isFinite(index) ? index : null, selection: sel.trim() };
+    }
+
+    function copyChatSelection() {
+        const m = chatCtxMenu;
+        if (!m || !m.selection) return;
+        void writeClipboard(m.selection).catch((error) => toast.error(errMsg(error)));
+    }
+
+    /** Copy the original markdown source of the assistant message, not the
+     *  rendered/selected plain text — users often want the raw code fences. */
+    function copyChatMarkdown() {
+        const m = chatCtxMenu;
+        const item = m?.index != null ? items[m.index] : undefined;
+        if (!m || !item || item.kind !== "assistant" || !item.text) return;
+        void writeClipboard(item.text).catch((error) => toast.error(errMsg(error)));
+    }
+
+    /** Send the selected text to the active terminal as input (no Enter — the
+     *  user reviews it in the terminal first, hence "send", not "run"). */
+    function sendChatSelectionToTerminal() {
+        const m = chatCtxMenu;
+        if (!m || !m.selection || !targetId) return;
+        try {
+            app.sendTextToActiveTerminal(m.selection);
+        } catch (error) {
+            toast.error(errMsg(error));
+        }
+    }
+
+    function chatCtxItems(): MenuItem[] {
+        const m = chatCtxMenu;
+        const itemIndex = m?.index ?? null;
+        const mdItem = itemIndex != null ? items[itemIndex] : undefined;
+        const hasMarkdown = !!mdItem && mdItem.kind === "assistant" && !!mdItem.text;
+        const canSendTerminal = !!targetId;
+        return [
+            {
+                label: t("common.copy"),
+                action: copyChatSelection,
+                disabled: !m?.selection,
+            },
+            {
+                label: t("ai.ctx.copy_markdown"),
+                action: copyChatMarkdown,
+                disabled: !hasMarkdown,
+            },
+            {
+                label: t("ai.ctx.send_to_terminal"),
+                action: sendChatSelectionToTerminal,
+                disabled: !canSendTerminal,
+            },
+        ];
+    }
+
+    // ─── Composer height (draggable) ─────────────────────────────────────
+    const INPUT_HEIGHT_MIN = 48;
+    const INPUT_HEIGHT_PANEL_FRAC = 0.6;
+
+    let inputAreaEl = $state<HTMLDivElement | null>(null);
+
+    /** Drag the handle above the composer to change its max-height. Mirrors the
+     *  AI panel width gesture: track start position, live-update during move,
+     *  persist once (global pref) on mouse-up. No Enter/newline involved — the
+     *  textarea still owns its own scrolling. */
+    function startInputResize(e: MouseEvent) {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startHeight = ai.inputMaxHeight();
+        // Cap by the panel height so the composer can never swallow the chat.
+        let panelArea = (inputAreaEl?.parentElement?.getBoundingClientRect().height ?? 0);
+        if (panelArea > 0) panelArea = Math.max(panelArea * INPUT_HEIGHT_PANEL_FRAC, INPUT_HEIGHT_MIN);
+        let stopped = false;
+
+        function stop() {
+            if (stopped) return;
+            stopped = true;
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", stop);
+            window.removeEventListener("blur", stop);
+        }
+
+        function onMove(ev: MouseEvent) {
+            const dy = ev.clientY - startY;
+            // Dragging up (negative dy) grows the composer.
+            const next = startHeight - dy;
+            const clamped = panelArea > 0
+                ? Math.min(Math.max(next, INPUT_HEIGHT_MIN), panelArea)
+                : Math.max(next, INPUT_HEIGHT_MIN);
+            ai.setInputMaxHeight(clamped);
+        }
+
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", stop);
+        window.addEventListener("blur", stop);
+    }
+
+    /** Double-click the handle: reset to the default height. */
+    function resetInputHeight() {
+        ai.setInputMaxHeight(120);
+    }
 </script>
 
 <div class="ai-panel">
@@ -425,7 +553,7 @@
     {#if auditOpen && session}
         <AuditPanel {tabId} />
     {:else}
-        <div class="chat" bind:this={chatBoxEl}>
+        <div class="chat" bind:this={chatBoxEl} oncontextmenu={onChatContextMenu}>
             {#each items as item, i (i)}
                 <div class="item item-{item.kind}">
                     {#if item.kind === "user"}
@@ -453,7 +581,7 @@
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                        <div class="bubble assistant md" class:streaming={item.streaming} class:cancelled={item.cancelled}>
+                        <div class="bubble assistant md" data-index-key={i} class:streaming={item.streaming} class:cancelled={item.cancelled}>
                             {#if item.text}
                                 {@html renderMarkdown(item.text)}
                             {:else if !item.cancelled}
@@ -570,10 +698,23 @@
             {/if}
         </div>
 
-        <div class="input-area">
+        {#if chatCtxMenu}
+            <BlockContextMenu x={chatCtxMenu.x} y={chatCtxMenu.y} items={chatCtxItems()} onClose={closeChatCtxMenu} />
+        {/if}
+
+        <div class="input-area" bind:this={inputAreaEl}>
+            {#if !app.isMobile}
+                <div class="input-resize-handle"
+                     onmousedown={startInputResize}
+                     ondblclick={resetInputHeight}
+                     role="separator"
+                     aria-orientation="horizontal"
+                     title={t("ai.input.resize_hint")}></div>
+            {/if}
             <textarea
                 bind:this={inputEl}
                 bind:value={inputText}
+                style="max-height: {ai.inputMaxHeight()}px;"
                 placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
                 disabled={busy}
@@ -915,6 +1056,7 @@
     }
 
     .input-area {
+        position: relative; /* anchor for the resizable-height handle above */
         display: flex; align-items: flex-end; gap: 8px; padding: 10px;
         border-top: 1px solid var(--divider);
         flex-shrink: 0;
@@ -929,11 +1071,30 @@
         color: var(--text);
         font-family: inherit; font-size: 13px; line-height: 1.45;
         transition: border-color 150ms ease, box-shadow 150ms ease;
+        /* The inline max-height from ai.inputMaxHeight() wins; this keeps the
+           default live while a fresh panel hasn't synced the pref yet. */
+        box-sizing: border-box;
     }
     textarea:focus {
         outline: none;
         border-color: color-mix(in srgb, var(--purple) 55%, transparent);
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 18%, transparent);
+    }
+    /* Draggable handle above the composer: pulls its max-height up/down.
+       Styled like the AI panel width grip (accent on hover) but horizontal. */
+    .input-resize-handle {
+        position: absolute;
+        left: 0; right: 0; top: -3px;
+        height: 6px;
+        cursor: row-resize;
+        z-index: 10;
+        background: transparent;
+        transition: background 0.12s ease;
+    }
+    .input-resize-handle:hover,
+    .input-resize-handle:active {
+        background: var(--accent);
+        opacity: 0.45;
     }
 
     /* Rollback confirmation modal — shell lives in Modal.svelte, typography
