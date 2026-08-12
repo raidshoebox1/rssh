@@ -404,12 +404,14 @@
     }
 
     /** Send the selected text to the active terminal as input (no Enter — the
-     *  user reviews it in the terminal first, hence "send", not "run"). */
+     *  user reviews it in the terminal first, hence "send", not "run"). Uses the
+     *  bracketed-paste path so multi-line blocks (heredocs etc.) are pasted as
+     *  one unit and don't get a bash PS2 "> " continuation prompt per line. */
     function sendChatSelectionToTerminal() {
         const m = chatCtxMenu;
         if (!m || !m.selection || !targetId) return;
         try {
-            app.sendTextToActiveTerminal(m.selection);
+            app.pasteToActiveTerminal(m.selection);
         } catch (error) {
             toast.error(errMsg(error));
         }
