@@ -631,6 +631,21 @@
                 </button>
             {/snippet}
         </DangerModeToggle>
+        <!-- 显示思考过程：全局开关（localStorage 持久化）。默认为关——不渲染
+             思考链；开启后按当前实现展示（默认折叠，点击逐条展开）。灯泡图标
+             与其余图标同风格，开启时 accent 高亮（区别于危险模式的红色）。 -->
+        <button class="btn-icon reasoning-toggle" class:on={ai.showReasoning()}
+                onclick={() => ai.setShowReasoning(!ai.showReasoning())}
+                title={ai.showReasoning() ? t("ai.toolbar.reasoning_hide") : t("ai.toolbar.reasoning_show")}
+                aria-label={ai.showReasoning() ? t("ai.toolbar.reasoning_hide") : t("ai.toolbar.reasoning_show")}
+                aria-pressed={ai.showReasoning()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- feather-style lightbulb: bulb + filament + rays -->
+                <path d="M9 18h6"/>
+                <path d="M10 22h4"/>
+                <path d="M12 2a7 7 0 0 0-4.9 12c.6.6 1 1.4 1.3 2.2A2 2 0 0 0 10.3 18h3.4a2 2 0 0 0 1.9-1.8c.3-.8.7-1.6 1.3-2.2A7 7 0 0 0 12 2z"/>
+            </svg>
+        </button>
         <!-- New session: archive the current conversation and return to the
              picker state; the panel stays open. Disabled when there is no
              live conversation to end. -->
@@ -682,11 +697,12 @@
                         </div>
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
-                        {#if item.reasoning}
+                        {#if item.reasoning && ai.showReasoning()}
                             <!-- 思考链折叠块：只看 UI 层，绝不进入终端。折叠时显示
                                  "> 思考中…"（思考进行中）或 "> 思考过程"（思考完成）；
                                  点击展开。思考完成的信号是首个非空正文 chunk 到达，
-                                 而不是整轮输出结束。 -->
+                                 而不是整轮输出结束。仅当工具栏的"显示思考过程"开关
+                                 开启时渲染。 -->
                             <button class="thinking" class:open={isReasoningExpanded(item.id)}
                                     onclick={() => toggleReasoning(item.id)}
                                     aria-expanded={isReasoningExpanded(item.id)}
@@ -955,6 +971,15 @@
     .danger-toggle.on:hover {
         color: var(--error);
         background: color-mix(in srgb, var(--error) 22%, transparent);
+    }
+    /* 显示思考过程开关：开启态 accent 高亮（与危险模式的红色区分开）。 */
+    .reasoning-toggle.on {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+    .reasoning-toggle.on:hover {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 22%, transparent);
     }
     .banner {
         display: flex; align-items: center; gap: 8px;
