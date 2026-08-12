@@ -541,6 +541,8 @@ const en = {
   "ai.toolbar.close_session": "Close and end session",
   "ai.toolbar.danger_aria": "Danger mode",
   "ai.toolbar.danger_enable": "Enable Danger Mode",
+  "ai.toolbar.reasoning_show": "Show reasoning",
+  "ai.toolbar.reasoning_hide": "Hide reasoning",
   "ai.history.title": "Previous conversations",
   "ai.history.untitled": "(empty conversation)",
   "ai.history.resume_tip": "Resume this conversation",
