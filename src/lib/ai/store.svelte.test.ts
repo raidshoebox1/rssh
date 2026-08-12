@@ -2390,3 +2390,223 @@ describe("sumAuditTokens", () => {
     expect(ai.sumAuditTokens({ entries: [] } as never)).toEqual({ tokens_in: 0, tokens_out: 0 });
   });
 });
+
+describe("reasoning stream", () => {
+  const args = {
+    tabId: "tab-a",
+    targetKind: "local" as const,
+    targetId: "pty-old",
+    skill: "general",
+    provider: "openai" as const,
+    model: "gpt-test",
+  };
+  const info = {
+    tab_id: "tab-a",
+    instance_id: "instance-a",
+    target_id: "pty-old",
+    skill: "general",
+    model: "gpt-test",
+    provider: "openai" as const,
+    conversation_id: "conversation-a",
+  };
+
+  async function setupSession() {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.activateTab("tab-a");
+    ai.openPanel("tab-a");
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "ai_session_start") return info;
+      return null;
+    });
+    await ai.startSession({ ...args, lease: ai.captureSessionLease("tab-a") });
+
+    const find = (event: string) => listenMock.mock.calls.find(
+      ([name]) => name === `${event}:tab-a`,
+    )?.[1] as ((e: { payload: unknown }) => void) | undefined;
+
+    return { ai, find };
+  }
+
+  it("appends reasoning deltas to the assistant bubble", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "thinking " } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "hard" } });
+
+    const items = ai.chatItems("tab-a");
+    expect(items).toHaveLength(1);
+    expect(items[0].kind === "assistant" && items[0].reasoning).toBe("thinking hard");
+    // No text chunk yet → reasoningDone still unset.
+    expect(items[0].kind === "assistant" && items[0].reasoningDone).toBeUndefined();
+  });
+
+  it("flips reasoningDone on the first non-empty text chunk, not at message_end", async () => {
+    const { ai, find } = await setupSession();
+    const reasoningDone = (id: string) => {
+      const it = ai.chatItems("tab-a").find((x) => x.kind === "assistant" && x.id === id);
+      return it && it.kind === "assistant" ? it.reasoningDone : undefined;
+    };
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "pondering" } });
+    expect(reasoningDone("r1")).toBeUndefined();
+
+    find("ai:assistant_delta")?.({ payload: { id: "r1", text: "A" } });
+    expect(reasoningDone("r1")).toBe(true);
+  });
+
+  it("replaces reasoning with the final value from message_end", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "partial" } });
+    find("ai:assistant_delta")?.({ payload: { id: "r1", text: "answer" } });
+    // message_end carries the sanitized final reasoning — replaces the stream
+    // accumulation (which may contain un-redacted secrets during streaming).
+    find("ai:assistant_message_end")?.({
+      payload: { id: "r1", text: "answer", reasoning: "REDACTED" },
+    });
+
+    const [item] = ai.chatItems("tab-a");
+    expect(item.kind === "assistant" && item.reasoning).toBe("REDACTED");
+    expect(item.kind === "assistant" && item.streaming).toBe(false);
+  });
+
+  it("keeps the streamed reasoning when message_end has none", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "kept" } });
+    find("ai:assistant_delta")?.({ payload: { id: "r1", text: "hi" } });
+    find("ai:assistant_message_end")?.({ payload: { id: "r1", text: "hi" } });
+
+    const [item] = ai.chatItems("tab-a");
+    expect(item.kind === "assistant" && item.reasoning).toBe("kept");
+  });
+
+  it("strips reasoningDone from the persisted timeline but keeps reasoning", async () => {
+    vi.useFakeTimers();
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "chain" } });
+    find("ai:assistant_delta")?.({ payload: { id: "r1", text: "out" } });
+    find("ai:assistant_message_end")?.({ payload: { id: "r1", text: "out", reasoning: "chain" } });
+
+    // closePanel does a final non-debounced save (the debounced schedulePersist
+    // timer is cancelled). That save carries the post-message_end state.
+    await ai.closePanel("tab-a");
+
+    const saves = invokeMock.mock.calls.filter(
+      ([command]) => command === "ai_conversation_save_timeline",
+    );
+    expect(saves.length).toBeGreaterThan(0);
+    const last = saves[saves.length - 1][1] as { timeline: string };
+    const persisted = JSON.parse(last.timeline) as Array<Record<string, unknown>>;
+    expect(persisted[0].reasoning).toBe("chain");
+    expect(persisted[0].reasoningDone).toBeUndefined();
+  });
+});
+
+describe("composer height pref", () => {
+  it("loads the saved height from localStorage, clamped to the cap", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => key === "ai-input-height" ? "9999" : null,
+      setItem: vi.fn(),
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    // 9999 → clamped to INPUT_HEIGHT_CAP (480).
+    expect(ai.inputHeight()).toBe(480);
+  });
+
+  it("falls back to the default when the stored value is invalid", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => key === "ai-input-height" ? "garbage" : null,
+      setItem: vi.fn(),
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    expect(ai.inputHeight()).toBe(56);
+  });
+
+  it("updates in-memory during a drag and persists on commit", async () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem,
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    ai.setInputHeight(200);
+    expect(ai.inputHeight()).toBe(200);
+    expect(setItem).not.toHaveBeenCalled();
+
+    ai.commitInputHeight();
+    expect(setItem).toHaveBeenCalledWith("ai-input-height", "200");
+  });
+
+  it("rejects non-finite values and values below the minimum", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    const original = ai.inputHeight();
+    ai.setInputHeight(NaN);
+    expect(ai.inputHeight()).toBe(original);
+    ai.setInputHeight(10);
+    expect(ai.inputHeight()).toBe(original);
+  });
+
+  it("reset restores the default and persists in one shot", async () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => key === "ai-input-height" ? "300" : null,
+      setItem,
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    expect(ai.inputHeight()).toBe(300);
+    setItem.mockClear();
+
+    ai.resetInputHeight();
+    expect(ai.inputHeight()).toBe(56);
+    expect(setItem).toHaveBeenCalledWith("ai-input-height", "56");
+  });
+});
+
+describe("show reasoning pref", () => {
+  it("defaults to off when no localStorage entry exists", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    expect(ai.showReasoning()).toBe(false);
+  });
+
+  it("loads the saved on-state from localStorage", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => key === "ai-show-reasoning" ? "1" : null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    expect(ai.showReasoning()).toBe(true);
+  });
+
+  it("persists '1' when turned on and removes the key when turned off", async () => {
+    const setItem = vi.fn();
+    const removeItem = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem,
+      removeItem,
+    });
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+
+    ai.setShowReasoning(true);
+    expect(ai.showReasoning()).toBe(true);
+    expect(setItem).toHaveBeenCalledWith("ai-show-reasoning", "1");
+
+    ai.setShowReasoning(false);
+    expect(ai.showReasoning()).toBe(false);
+    expect(removeItem).toHaveBeenCalledWith("ai-show-reasoning");
+  });
+});
