@@ -709,11 +709,10 @@
                                     title={thinkingFinished(item)
                                         ? t("ai.bubble.thinking_tip_done")
                                         : t("ai.bubble.thinking_tip_streaming")}>
-                                <span class="thinking-icon">&gt;</span>
+                                <span class="thinking-icon" class:down={isReasoningExpanded(item.id)}>&gt;</span>
                                 <span class="thinking-label">{thinkingFinished(item)
                                     ? t("ai.bubble.thinking_done")
                                     : t("ai.bubble.thinking_streaming")}</span>
-                                <span class="thinking-chevron">{isReasoningExpanded(item.id) ? "▲" : "▼"}</span>
                             </button>
                             {#if isReasoningExpanded(item.id)}
                                 <div class="thinking-body">{item.reasoning}</div>
@@ -1108,12 +1107,15 @@
     }
     .thinking .thinking-icon {
         font-family: monospace; font-weight: 600;
+        /* 折叠时指向右（>），展开后旋转 90° 指向下（v）作为开合指示。 */
+        display: inline-block;
+        transition: transform 120ms ease;
+    }
+    .thinking .thinking-icon.down {
+        transform: rotate(90deg);
     }
     .thinking-label {
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .thinking-chevron {
-        font-size: 9px; flex-shrink: 0;
     }
     .thinking-body {
         align-self: flex-start;
