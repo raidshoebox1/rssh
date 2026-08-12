@@ -244,10 +244,12 @@ pub async fn chat(
                         sink(ChatDelta::Text(content.to_string()));
                     }
                 }
-                // DeepSeek reasoner：累积思考链；不往 sink 推（不渲染到 UI），但要还回去
+                // DeepSeek reasoner：思考链既要还回 history（下轮 400 防护），
+                // 也要走 sink 推给 UI 折叠展示（ChatDelta::Reasoning）。
                 if let Some(rc) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
                     if !rc.is_empty() {
                         reasoning_out.push_str(rc);
+                        sink(ChatDelta::Reasoning(rc.to_string()));
                     }
                 }
                 if let Some(tcs_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {

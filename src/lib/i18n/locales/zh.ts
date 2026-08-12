@@ -570,6 +570,10 @@ const zh: Messages = {
   "ai.note.skill_loaded": "已加载技能：{name}",
   "ai.note.command_blocked": "rssh 拦截了命令：{cmd}（{reason}）",
   "ai.bubble.cancelled": "已停止",
+  "ai.bubble.thinking_streaming": "思考中…",
+  "ai.bubble.thinking_done": "思考过程",
+  "ai.bubble.thinking_tip_streaming": "思考流式输出中 - 点击展开",
+  "ai.bubble.thinking_tip_done": "查看思考过程",
 
   // ── AI 排障：WebToolConfirmCard ──
   "ai.webcmd.search": "网页搜索",

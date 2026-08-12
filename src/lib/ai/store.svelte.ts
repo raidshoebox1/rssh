@@ -1962,8 +1962,24 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
     }
   });
 
+  // 思考链增量（DeepSeek reasoner 等）：append 到同一 assistant item 的
+  // reasoning 字段，UI 折叠展示。与 text 相同的 in-place mutation——只在 UI
+  // 渲染层消费，绝不写入终端。
+  await addListener<{ id: string; reasoning: string }>(`ai:assistant_reasoning_delta:${tab}`, (e) => {
+    const arr = _chatByTab[tab];
+    if (!arr) return;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "assistant" && item.id === e.payload.id) {
+        item.reasoning = (item.reasoning ?? "") + e.payload.reasoning;
+        return;
+      }
+    }
+  });
+
   await addListener<{
     id: string; text: string; cancelled?: boolean;
+    reasoning?: string | null;
     tokens_in?: number | null; tokens_out?: number | null;
   }>(`ai:assistant_message_end:${tab}`, (e) => {
     const arr = _chatByTab[tab] ?? [];
@@ -1987,6 +2003,7 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
           const replaced: ChatItem = {
             ...item,
             text: finalText,
+            reasoning: e.payload.reasoning || item.reasoning,
             streaming: false,
             cancelled: e.payload.cancelled === true,
           };
