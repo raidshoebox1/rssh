@@ -16,7 +16,7 @@
     import { formatTokenCount } from "./tokens.ts";
     import { t, errMsg } from "../i18n/index.svelte.ts";
     import { toast } from "../stores/toast.svelte.ts";
-    import { writeText as writeClipboard } from "../clipboard.ts";
+    import { readText as readClipboard, writeText as writeClipboard } from "../clipboard.ts";
     import { onMount } from "svelte";
 
     // tabId 是 AI 会话身份（切 tab / 重连不丢；显式关闭面板时结束）。
@@ -446,6 +446,15 @@
         }
     }
 
+    /** Send the selected text to this panel's composer (input box), ready for
+     *  the user to review/edit before sending — the same prefill channel the
+     *  terminal block "Send to AI" uses. */
+    function sendChatSelectionToInput() {
+        const m = chatCtxMenu;
+        if (!m || !m.selection) return;
+        ai.prefillInput(tabId, m.selection);
+    }
+
     function chatCtxItems(): MenuItem[] {
         const m = chatCtxMenu;
         const itemIndex = m?.index ?? null;
@@ -467,6 +476,11 @@
                 label: t("ai.ctx.send_to_terminal"),
                 action: sendChatSelectionToTerminal,
                 disabled: !canSendTerminal,
+            },
+            {
+                label: t("ai.ctx.send_to_input"),
+                action: sendChatSelectionToInput,
+                disabled: !m?.selection,
             },
         ];
     }
@@ -520,6 +534,67 @@
     /** Double-click the handle: reset to the default height (set + persist). */
     function resetInputHeight() {
         ai.resetInputMaxHeight();
+    }
+
+    // ─── Composer right-click menu (copy / paste) ───────────────────────
+    let inputCtxMenu = $state<{ x: number; y: number } | null>(null);
+
+    function closeInputCtxMenu() { inputCtxMenu = null; }
+
+    /** Right-click on the textarea: always offer the menu; Copy is greyed out
+     *  when nothing is selected (same disabled styling as the terminal block
+     *  menu via BlockContextMenu). */
+    function onInputContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        inputCtxMenu = { x: e.clientX, y: e.clientY };
+    }
+
+    function selectedInputText(): string {
+        const el = inputEl;
+        if (!el) return "";
+        return el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0);
+    }
+
+    function copyInputSelection() {
+        const sel = selectedInputText();
+        if (!sel) return;
+        void writeClipboard(sel).catch((error) => toast.error(errMsg(error)));
+    }
+
+    async function pasteIntoInput() {
+        let text: string;
+        try {
+            text = await readClipboard();
+        } catch (error) {
+            toast.error(errMsg(error));
+            return;
+        }
+        const el = inputEl;
+        if (!el) return;
+        const start = el.selectionStart ?? inputText.length;
+        const end = el.selectionEnd ?? inputText.length;
+        inputText = inputText.slice(0, start) + text + inputText.slice(end);
+        // Restore the caret just past the pasted text.
+        requestAnimationFrame(() => {
+            const pos = start + text.length;
+            try { el.setSelectionRange(pos, pos); } catch { /* no-op */ }
+            el.focus();
+        });
+    }
+
+    function inputCtxItems(): MenuItem[] {
+        return [
+            {
+                label: t("common.copy"),
+                action: copyInputSelection,
+                disabled: !selectedInputText(),
+            },
+            {
+                label: t("common.paste"),
+                action: pasteIntoInput,
+            },
+        ];
     }
 </script>
 
@@ -775,9 +850,13 @@
                 style="height: {ai.inputMaxHeight()}px; min-height: 36px;"
                 placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
+                oncontextmenu={onInputContextMenu}
                 disabled={busy}
                 readonly={streaming}
             ></textarea>
+            {#if inputCtxMenu}
+                <BlockContextMenu x={inputCtxMenu.x} y={inputCtxMenu.y} items={inputCtxItems()} onClose={closeInputCtxMenu} />
+            {/if}
             {#if streaming}
                 <button class="btn btn-sm btn-stop" onclick={stopStreaming} title={t("ai.input.stop")}>
                     {t("ai.input.stop")}
