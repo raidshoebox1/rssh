@@ -829,6 +829,11 @@ impl Actor {
                     // 思考链增量：独立事件给前端折叠展示，绝不写进终端也不会
                     // 进 captured（取消时 reasoning 如实只显示已发射的部分）。
                     // 与 Text 分支同构：带 context_epoch 供前端 epoch 校验。
+                    //
+                    // 脱敏时机跟 Text 一致：流式增量 emit 原文（实时性优先），
+                    // 最终 resp.reasoning_content 在 message_end 前由 sanitize
+                    // 脱敏并替换前端累积值。流式期间思考链里的敏感串会短暂
+                    // 可见——这是既有 text delta 的相同取舍，不是回归。
                     ChatDelta::Reasoning(r) => {
                         let _ = app.emit(
                             &format!("ai:assistant_reasoning_delta:{tab_id}"),

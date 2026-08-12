@@ -570,8 +570,8 @@ const en = {
   "ai.note.skill_loaded": "Loaded skill: {name}",
   "ai.note.command_blocked": "rssh blocked the command: {cmd} ({reason})",
   "ai.bubble.cancelled": "stopped",
-  "ai.bubble.thinking_streaming": "思考中…",
-  "ai.bubble.thinking_done": "思考过程",
+  "ai.bubble.thinking_streaming": "Thinking…",
+  "ai.bubble.thinking_done": "Reasoning",
   "ai.bubble.thinking_tip_streaming": "Reasoning stream — click to expand",
   "ai.bubble.thinking_tip_done": "View the thinking process",
 

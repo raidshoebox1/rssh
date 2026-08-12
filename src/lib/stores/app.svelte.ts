@@ -590,15 +590,6 @@ export function terminalPaste(tabId: string, text: string) {
 export function sendTextToActiveTerminal(text: string) {
   _terminalControls.get(_activeTabId)?.sendText(text);
 }
-/** Send user text to the active terminal through the bracketed-paste path
- *  (like middle-click / manual paste): multi-line blocks such as heredocs are
- *  wrapped in \x1b[200~…\x1b[201~ so bash treats them as one paste and does NOT
- *  echo its PS2 "> " continuation prompt per line. Line breaks are normalized
- *  to CR to avoid CRLF doubling. serialize/telnet are not affected: the paste
- *  handler falls back to sendText for those transports. */
-export function pasteToActiveTerminal(text: string) {
-  _terminalControls.get(_activeTabId)?.paste(text);
-}
 /** Return keyboard focus to a tab's terminal — used by modals (snippet picker,
  *  search) that steal focus and must hand it back on close, else focus falls
  *  to document.body and the user can't type until they click the terminal. */
