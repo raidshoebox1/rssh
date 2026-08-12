@@ -56,6 +56,18 @@ const MIN_PANEL_WIDTH = 280;
 const INPUT_MAX_HEIGHT_KEY = "ai-input-max-height";
 const INPUT_MAX_HEIGHT_DEFAULT = 56;
 const INPUT_MAX_HEIGHT_CAP = 480;
+/** Global master switch for rendering the model's chain-of-thought
+ *  (reasoning) block. OFF (default) hides it entirely; ON shows it in the
+ *  collapsed-by-default state, expandable per message. Per-user pref, stored in
+ *  localStorage like POS_KEY / INPUT_MAX_HEIGHT_KEY (R8). */
+const SHOW_REASONING_KEY = "ai-show-reasoning";
+function loadShowReasoning(): boolean {
+  try {
+    return localStorage.getItem(SHOW_REASONING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 function loadInputMaxHeight(): number {
   try {
     const v = Number.parseInt(localStorage.getItem(INPUT_MAX_HEIGHT_KEY) ?? "", 10);
@@ -244,6 +256,23 @@ export function commitInputMaxHeight() {
 export function resetInputMaxHeight() {
   _inputMaxHeight = INPUT_MAX_HEIGHT_DEFAULT;
   commitInputMaxHeight();
+}
+
+// ─── Show reasoning (global pref, see SHOW_REASONING_KEY) ─────────
+
+let _showReasoning = $state<boolean>(loadShowReasoning());
+
+/** Master switch for rendering the chain-of-thought block. OFF (default)
+ *  hides it entirely; ON shows it (collapsed per message, expandable). */
+export function showReasoning() { return _showReasoning; }
+export function setShowReasoning(on: boolean) {
+  _showReasoning = on;
+  try {
+    if (on) localStorage.setItem(SHOW_REASONING_KEY, "1");
+    else localStorage.removeItem(SHOW_REASONING_KEY);
+  } catch (error) {
+    console.warn("[ai] persist show reasoning:", error);
+  }
 }
 
 // ─── Open/close ───────────────────────────────────────────────────

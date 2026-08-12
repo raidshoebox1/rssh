@@ -534,6 +534,8 @@ const zh: Messages = {
   "ai.toolbar.close_session": "关闭并结束会话",
   "ai.toolbar.danger_aria": "危险模式",
   "ai.toolbar.danger_enable": "开启危险模式",
+  "ai.toolbar.reasoning_show": "显示思考过程",
+  "ai.toolbar.reasoning_hide": "隐藏思考过程",
   "ai.history.title": "历史对话",
   "ai.history.untitled": "（空对话）",
   "ai.history.resume_tip": "恢复此对话并继续",
