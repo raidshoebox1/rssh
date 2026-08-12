@@ -98,6 +98,28 @@ describe("restoreTimeline", () => {
     ]);
     expect(items).toEqual([{ kind: "note", text: "ok", at: 4 }]);
   });
+
+  it("preserves the reasoning field on restored assistant bubbles", () => {
+    const [a] = roundtrip([
+      { kind: "assistant", id: "r1", text: "answer", at: 1, streaming: false, reasoning: "chain of thought" },
+    ]);
+    expect(a.kind === "assistant" && a.reasoning).toBe("chain of thought");
+    // restoreTimeline forces streaming=false, so the thinking label renders as
+    // "done" even without a live reasoningDone flag (which serializeTimeline strips).
+    expect(a.kind === "assistant" && a.streaming).toBe(false);
+  });
+
+  it("does not resurrect a live reasoningDone flag from persisted timelines", () => {
+    // serializeTimeline strips reasoningDone before persisting; restoreTimeline
+    // should not re-inject it. A stale true from an older format is passed
+    // through verbatim (restore doesn't strip unknown fields), but the
+    // streaming=false reset already drives the "done" label — see thinkingFinished.
+    const [a] = roundtrip([
+      { kind: "assistant", id: "r1", text: "answer", at: 1, streaming: true, reasoning: "thinks" },
+    ]);
+    expect(a.kind === "assistant" && a.streaming).toBe(false);
+    expect(a.kind === "assistant" && a.reasoningDone).toBeUndefined();
+  });
 });
 
 describe("applyTerminalMutations", () => {

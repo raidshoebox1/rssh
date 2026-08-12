@@ -102,6 +102,7 @@
         // 触发 BlockContextMenu 的 outside-click 关闭，这里兜底清掉，避免回到
         // 这个 tab 时菜单还在旧坐标上挂着。
         chatCtxMenu = null;
+        inputCtxMenu = null;
     });
 
     // 历史对话随当前 target（同一 tab 重连时 session id 会变）重新加载。
@@ -374,11 +375,13 @@
     }
 
     // ─── Right-click context menu on AI output ────────────────────────────
-    /** Active context menu. `index` is the message item whose bubble the right
-     *  click landed in (null when clicking empty chat padding / on a user msg);
-     *  `selection` is the text currently selected in the document, used for the
-     *  copy / send-to-terminal items. */
-    let chatCtxMenu = $state<{ x: number; y: number; index: number | null; selection: string } | null>(null);
+    /** Active context menu. `msgId` is the assistant message id whose bubble the
+     *  right click landed in (null when clicking empty chat padding / on a user
+     *  msg); `selection` is the text currently selected in the document, used
+     *  for the copy / send-to-terminal items. Looking up by stable message id
+     *  (not array index) survives rollbacks that shift indices while the menu
+     *  is open. */
+    let chatCtxMenu = $state<{ x: number; y: number; msgId: string | null; selection: string } | null>(null);
 
     /** 展开的思考过程气泡：assistant item id → 展开。默认折叠，点击展开。
      *  思考链是只读展示，不进终端、不参与任何命令路由。 */
@@ -410,11 +413,11 @@
         const target = e.target as Element | null;
         const bubble = target?.closest?.(".bubble.assistant.md");
         if (!bubble) return;
-        const index = Number((bubble as HTMLElement).dataset.indexKey ?? -1);
+        const msgId = (bubble as HTMLElement).dataset.msgId ?? null;
         // The extracted plain-text selection is what copy / send-to-terminal use;
-        // the raw markdown comes from the stored ChatItem via `index`.
+        // the raw markdown comes from the stored ChatItem via `msgId`.
         e.preventDefault();
-        chatCtxMenu = { x: e.clientX, y: e.clientY, index: Number.isFinite(index) ? index : null, selection: sel.trim() };
+        chatCtxMenu = { x: e.clientX, y: e.clientY, msgId, selection: sel.trim() };
     }
 
     function copyChatSelection() {
@@ -427,20 +430,22 @@
      *  rendered/selected plain text — users often want the raw code fences. */
     function copyChatMarkdown() {
         const m = chatCtxMenu;
-        const item = m?.index != null ? items[m.index] : undefined;
+        const item = m?.msgId != null ? items.find((it) => it.kind === "assistant" && it.id === m.msgId) : undefined;
         if (!m || !item || item.kind !== "assistant" || !item.text) return;
         void writeClipboard(item.text).catch((error) => toast.error(errMsg(error)));
     }
 
-    /** Send the selected text to the active terminal as input (no Enter — the
-     *  user reviews it in the terminal first, hence "send", not "run"). Uses the
-     *  bracketed-paste path so multi-line blocks (heredocs etc.) are pasted as
-     *  one unit and don't get a bash PS2 "> " continuation prompt per line. */
+    /** Send the selected text to this panel's terminal (the one the AI is
+     *  diagnosing — identified by `tabId`, not the globally active tab) as input
+     *  (no Enter — the user reviews it in the terminal first, hence "send", not
+     *  "run"). Uses the bracketed-paste path so multi-line blocks (heredocs etc.)
+     *  are pasted as one unit and don't get a bash PS2 "> " continuation prompt
+     *  per line. */
     function sendChatSelectionToTerminal() {
         const m = chatCtxMenu;
         if (!m || !m.selection || !targetId) return;
         try {
-            app.pasteToActiveTerminal(m.selection);
+            app.terminalPaste(tabId, m.selection);
         } catch (error) {
             toast.error(errMsg(error));
         }
@@ -457,8 +462,8 @@
 
     function chatCtxItems(): MenuItem[] {
         const m = chatCtxMenu;
-        const itemIndex = m?.index ?? null;
-        const mdItem = itemIndex != null ? items[itemIndex] : undefined;
+        const itemMsgId = m?.msgId ?? null;
+        const mdItem = itemMsgId != null ? items.find((it) => it.kind === "assistant" && it.id === itemMsgId) : undefined;
         const hasMarkdown = !!mdItem && mdItem.kind === "assistant" && !!mdItem.text;
         const canSendTerminal = !!targetId;
         return [
@@ -499,7 +504,7 @@
     function startInputResize(e: MouseEvent) {
         e.preventDefault();
         const startY = e.clientY;
-        const startHeight = ai.inputMaxHeight();
+        const startHeight = ai.inputHeight();
         // Cap by the panel height so the composer can never swallow the chat.
         let panelArea = (inputAreaEl?.parentElement?.getBoundingClientRect().height ?? 0);
         if (panelArea > 0) panelArea = Math.max(panelArea * INPUT_HEIGHT_PANEL_FRAC, INPUT_HEIGHT_MIN);
@@ -513,7 +518,7 @@
             window.removeEventListener("blur", stop);
             // Persist once on mouse-up — onMove only touches $state, matching
             // the AI panel width gesture (setPanelWidth + commitPanelWidth).
-            ai.commitInputMaxHeight();
+            ai.commitInputHeight();
         }
 
         function onMove(ev: MouseEvent) {
@@ -523,7 +528,7 @@
             const clamped = panelArea > 0
                 ? Math.min(Math.max(next, INPUT_HEIGHT_MIN), panelArea)
                 : Math.max(next, INPUT_HEIGHT_MIN);
-            ai.setInputMaxHeight(clamped);
+            ai.setInputHeight(clamped);
         }
 
         document.addEventListener("mousemove", onMove);
@@ -533,7 +538,7 @@
 
     /** Double-click the handle: reset to the default height (set + persist). */
     function resetInputHeight() {
-        ai.resetInputMaxHeight();
+        ai.resetInputHeight();
     }
 
     // ─── Composer right-click menu (copy / paste) ───────────────────────
@@ -682,7 +687,7 @@
     {#if auditOpen && session}
         <AuditPanel {tabId} />
     {:else}
-        <div class="chat" bind:this={chatBoxEl} oncontextmenu={onChatContextMenu}>
+        <div class="chat" bind:this={chatBoxEl} oncontextmenu={app.isMobile ? undefined : onChatContextMenu}>
             {#each items as item, i (i)}
                 <div class="item item-{item.kind}">
                     {#if item.kind === "user"}
@@ -731,7 +736,7 @@
                             {/if}
                         {/if}
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                        <div class="bubble assistant md" data-index-key={i} class:streaming={item.streaming} class:cancelled={item.cancelled}>
+                        <div class="bubble assistant md" data-msg-id={item.id} class:streaming={item.streaming} class:cancelled={item.cancelled}>
                             {#if item.text}
                                 {@html renderMarkdown(item.text)}
                             {:else if !item.cancelled}
@@ -805,10 +810,10 @@
             <textarea
                 bind:this={inputEl}
                 bind:value={inputText}
-                style="height: {ai.inputMaxHeight()}px; min-height: 36px;"
+                style="height: {ai.inputHeight()}px; min-height: 48px;"
                 placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
-                oncontextmenu={onInputContextMenu}
+                oncontextmenu={app.isMobile ? undefined : onInputContextMenu}
                 disabled={busy}
                 readonly={streaming}
             ></textarea>
@@ -1205,12 +1210,12 @@
         opacity: 0.45;
     }
     textarea {
-        flex: 1; min-height: 36px; resize: none;
+        flex: 1; min-height: 48px; resize: none;
         padding: 6px 8px; border: 1px solid var(--divider);
         border-radius: 4px; background: var(--bg); color: var(--text);
         font-family: inherit; font-size: 13px;
         box-sizing: border-box;
-        /* The inline height from ai.inputMaxHeight() drives the box height and
+        /* The inline height from ai.inputHeight() drives the box height and
            the resize handle; any extra content scrolls inside the box. */
         overflow-y: auto;
     }

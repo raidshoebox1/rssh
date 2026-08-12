@@ -53,13 +53,13 @@ const MIN_PANEL_WIDTH = 280;
  *  and what visibly grows/shrinks the box). Stored in localStorage like
  *  POS_KEY — a per-user preference, not per-tab (R8: global UI state belongs in
  *  the domain store, not component singletons). */
-const INPUT_MAX_HEIGHT_KEY = "ai-input-max-height";
-const INPUT_MAX_HEIGHT_DEFAULT = 56;
-const INPUT_MAX_HEIGHT_CAP = 480;
+const INPUT_HEIGHT_KEY = "ai-input-height";
+const INPUT_HEIGHT_DEFAULT = 56;
+const INPUT_HEIGHT_CAP = 480;
 /** Global master switch for rendering the model's chain-of-thought
  *  (reasoning) block. OFF (default) hides it entirely; ON shows it in the
  *  collapsed-by-default state, expandable per message. Per-user pref, stored in
- *  localStorage like POS_KEY / INPUT_MAX_HEIGHT_KEY (R8). */
+ *  localStorage like POS_KEY / INPUT_HEIGHT_KEY (R8). */
 const SHOW_REASONING_KEY = "ai-show-reasoning";
 function loadShowReasoning(): boolean {
   try {
@@ -68,12 +68,12 @@ function loadShowReasoning(): boolean {
     return false;
   }
 }
-function loadInputMaxHeight(): number {
+function loadInputHeight(): number {
   try {
-    const v = Number.parseInt(localStorage.getItem(INPUT_MAX_HEIGHT_KEY) ?? "", 10);
-    return Number.isFinite(v) && v >= 48 ? Math.min(v, INPUT_MAX_HEIGHT_CAP) : INPUT_MAX_HEIGHT_DEFAULT;
+    const v = Number.parseInt(localStorage.getItem(INPUT_HEIGHT_KEY) ?? "", 10);
+    return Number.isFinite(v) && v >= 48 ? Math.min(v, INPUT_HEIGHT_CAP) : INPUT_HEIGHT_DEFAULT;
   } catch {
-    return INPUT_MAX_HEIGHT_DEFAULT;
+    return INPUT_HEIGHT_DEFAULT;
   }
 }
 function loadPos(): AiPosition {
@@ -231,31 +231,31 @@ export function setPosition(p: AiPosition) {
   localStorage.setItem(POS_KEY, p);
 }
 
-// ─── Composer height (global pref, see INPUT_MAX_HEIGHT_KEY) ─────
+// ─── Composer height (global pref, see INPUT_HEIGHT_KEY) ─────
 // Mirrors setPanelWidth/commitPanelWidth: the live drag only touches $state
 // (60+ mousemoves/sec), and the localStorage write is deferred to mouse-up.
 
-let _inputMaxHeight = $state<number>(loadInputMaxHeight());
+let _inputHeight = $state<number>(loadInputHeight());
 
-export function inputMaxHeight() { return _inputMaxHeight; }
+export function inputHeight() { return _inputHeight; }
 /** In-memory update only — call during a drag for live feedback. Persist with
- *  commitInputMaxHeight() on mouse-up, or use resetInputMaxHeight() for the
+ *  commitInputHeight() on mouse-up, or use resetInputHeight() for the
  *  double-click reset (which both sets and persists). */
-export function setInputMaxHeight(px: number) {
+export function setInputHeight(px: number) {
   if (!Number.isFinite(px) || px < 48) return;
-  _inputMaxHeight = Math.round(px);
+  _inputHeight = Math.round(px);
 }
-export function commitInputMaxHeight() {
+export function commitInputHeight() {
   try {
-    localStorage.setItem(INPUT_MAX_HEIGHT_KEY, String(_inputMaxHeight));
+    localStorage.setItem(INPUT_HEIGHT_KEY, String(_inputHeight));
   } catch (error) {
     console.warn("[ai] persist input height:", error);
   }
 }
 /** Double-click reset: restore the default and persist in one shot. */
-export function resetInputMaxHeight() {
-  _inputMaxHeight = INPUT_MAX_HEIGHT_DEFAULT;
-  commitInputMaxHeight();
+export function resetInputHeight() {
+  _inputHeight = INPUT_HEIGHT_DEFAULT;
+  commitInputHeight();
 }
 
 // ─── Show reasoning (global pref, see SHOW_REASONING_KEY) ─────────
