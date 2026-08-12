@@ -749,10 +749,15 @@ impl Actor {
                     }
                     // 思考链增量：独立事件给前端折叠展示，绝不写进终端也不会
                     // 进 captured（取消时 reasoning 如实只显示已发射的部分）。
+                    // 与 Text 分支同构：带 context_epoch 供前端 epoch 校验。
                     ChatDelta::Reasoning(r) => {
                         let _ = app.emit(
                             &format!("ai:assistant_reasoning_delta:{tab_id}"),
-                            json!({ "id": sink_msg_id, "reasoning": r }),
+                            json!({
+                                "id": sink_msg_id,
+                                "reasoning": r,
+                                "context_epoch": context_epoch,
+                            }),
                         );
                     }
                     _ => {}
