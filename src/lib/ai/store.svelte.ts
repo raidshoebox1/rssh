@@ -66,15 +66,18 @@ export type AiPosition = "left" | "right";
 const POS_KEY = "ai_panel_position";
 const LEGACY_PANEL_WIDTH_KEY = "ai-panel-width";
 const MIN_PANEL_WIDTH = 280;
-/** Global AI composer height pref (max-height of the input textarea). Stored in
- *  localStorage like POS_KEY — a per-user preference, not per-tab (R8: global
- *  UI state belongs in the domain store, not component singletons). */
+/** Global AI composer height pref (explicit height of the input textarea — not
+ *  max-height; a fixed textarea height is what the drag handle actually changes
+ *  and what visibly grows/shrinks the box). Stored in localStorage like
+ *  POS_KEY — a per-user preference, not per-tab (R8: global UI state belongs in
+ *  the domain store, not component singletons). */
 const INPUT_MAX_HEIGHT_KEY = "ai-input-max-height";
-const INPUT_MAX_HEIGHT_DEFAULT = 120;
+const INPUT_MAX_HEIGHT_DEFAULT = 56;
+const INPUT_MAX_HEIGHT_CAP = 480;
 function loadInputMaxHeight(): number {
   try {
     const v = Number.parseInt(localStorage.getItem(INPUT_MAX_HEIGHT_KEY) ?? "", 10);
-    return Number.isFinite(v) && v >= 48 ? v : INPUT_MAX_HEIGHT_DEFAULT;
+    return Number.isFinite(v) && v >= 48 ? Math.min(v, INPUT_MAX_HEIGHT_CAP) : INPUT_MAX_HEIGHT_DEFAULT;
   } catch {
     return INPUT_MAX_HEIGHT_DEFAULT;
   }
