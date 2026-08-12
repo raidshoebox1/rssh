@@ -368,6 +368,18 @@
      *  copy / send-to-terminal items. */
     let chatCtxMenu = $state<{ x: number; y: number; index: number | null; selection: string } | null>(null);
 
+    /** 展开的思考过程气泡：assistant item id → 展开。默认折叠，点击展开。
+     *  思考链是只读展示，不进终端、不参与任何命令路由。 */
+    let expandedReasoning = $state<Set<string>>(new Set());
+    function toggleReasoning(id: string) {
+        const next = new Set(expandedReasoning);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        expandedReasoning = next;
+    }
+    function isReasoningExpanded(id: string): boolean {
+        return expandedReasoning.has(id);
+    }
+
     /** Close on outside click / Esc — BlockContextMenu already listens for this,
      *  so here we only reset our own state when it fires onClose. */
     function closeChatCtxMenu() { chatCtxMenu = null; }
@@ -590,6 +602,25 @@
                         </div>
                     {:else if item.kind === "assistant"}
                         <div class="ts">{fmt(item.at)}</div>
+                        {#if item.reasoning}
+                            <!-- 思考链折叠块：只看 UI 层，绝不进入终端。折叠时显示
+                                 "> 思考中…"（流式）或 "> 思考过程"（完成后）；点击展开。 -->
+                            <button class="thinking" class:open={isReasoningExpanded(item.id)}
+                                    onclick={() => toggleReasoning(item.id)}
+                                    aria-expanded={isReasoningExpanded(item.id)}
+                                    title={item.streaming
+                                        ? t("ai.bubble.thinking_tip_streaming")
+                                        : t("ai.bubble.thinking_tip_done")}>
+                                <span class="thinking-icon">">"</span>
+                                <span class="thinking-label">{item.streaming
+                                    ? t("ai.bubble.thinking_streaming")
+                                    : t("ai.bubble.thinking_done")}</span>
+                                <span class="thinking-chevron">{isReasoningExpanded(item.id) ? "▲" : "▼"}</span>
+                            </button>
+                            {#if isReasoningExpanded(item.id)}
+                                <div class="thinking-body">{item.reasoning}</div>
+                            {/if}
+                        {/if}
                         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                         <div class="bubble assistant md" data-index-key={i} class:streaming={item.streaming} class:cancelled={item.cancelled}>
                             {#if item.text}
@@ -944,6 +975,49 @@
     /* User timestamps sit over their right-aligned bubble; assistant ones
        over the left-aligned bubble — the column reads as two rails. */
     .item-user .ts { align-self: flex-end; margin-right: 2px; }
+
+    /* ── 思考链折叠块 ──
+       只渲染于 UI 层，绝不进入终端。折叠:一行弱化小字"> 思考中…/思考过程"；
+       展开:等宽小字 + 弱化背景，明显区别于 markdown 正文。 */
+    .thinking {
+        align-self: flex-start;
+        display: inline-flex; align-items: center; gap: 5px;
+        margin: 2px 0 2px;
+        padding: 2px 8px;
+        border: none; border-radius: 4px;
+        background: color-mix(in srgb, var(--text-dim) 10%, transparent);
+        color: var(--text-dim);
+        font-family: inherit; font-size: 12px;
+        cursor: pointer;
+        max-width: 100%;
+    }
+    .thinking:hover {
+        background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+        color: var(--text);
+    }
+    .thinking .thinking-icon {
+        font-family: monospace; font-weight: 600;
+    }
+    .thinking-label {
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .thinking-chevron {
+        font-size: 9px; flex-shrink: 0;
+    }
+    .thinking-body {
+        align-self: flex-start;
+        max-width: 95%;
+        width: 100%;
+        margin: 2px 0 4px;
+        padding: 6px 9px;
+        border-left: 2px solid var(--divider);
+        background: color-mix(in srgb, var(--text-dim) 6%, transparent);
+        color: var(--text-sub);
+        font-family: monospace; font-size: 11.5px;
+        line-height: 1.4;
+        white-space: pre-wrap; word-break: break-word;
+        border-radius: 0 4px 4px 0;
+    }
     .bubble {
         padding: 7px 11px; border-radius: 10px;
         max-width: 92%; word-break: break-word; white-space: pre-wrap;

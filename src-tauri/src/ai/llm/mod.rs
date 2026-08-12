@@ -99,10 +99,13 @@ pub struct ModelInfo {
     pub display_name: Option<String>,
 }
 
-/// 流式增量回调。Text 用于 UI 实时渲染；其余仅供调试 / 暂不消费。
+/// 流式增量回调。Text 用于 UI 实时渲染；Reasoning 是思考链增量（DeepSeek
+/// reasoner 等），UI 折叠展示用，绝不写入终端；其余仅供调试 / 暂不消费。
 #[derive(Debug, Clone)]
 pub enum ChatDelta {
     Text(String),
+    /// 思考链增量（DeepSeek reasoner 等）—— UI 折叠展示用，绝不写入终端。
+    Reasoning(String),
     ToolStart {
         tool_call_id: String,
         name: String,
