@@ -244,9 +244,14 @@ pub async fn chat(
                         sink(ChatDelta::Text(content.to_string()));
                     }
                 }
-                // DeepSeek reasoner：思考链既要还回 history（下轮 400 防护），
-                // 也要走 sink 推给 UI 折叠展示（ChatDelta::Reasoning）。
-                if let Some(rc) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                // 思考链：DeepSeek 官方 SDK 用 reasoning_content，部分 vllm/
+                // 网关（如本项目实测的 deepseek-v4-flash-0731-max）用 reasoning。
+                // 两字段都识别，命中任一即累积 + 走 sink 推给 UI 折叠展示。
+                if let Some(rc) = delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+                    .and_then(|c| c.as_str())
+                {
                     if !rc.is_empty() {
                         reasoning_out.push_str(rc);
                         sink(ChatDelta::Reasoning(rc.to_string()));
