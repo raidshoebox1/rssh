@@ -816,18 +816,29 @@ impl Actor {
             let captured: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
             let captured_for_sink = captured.clone();
             let sink: DeltaSink = std::sync::Arc::new(move |delta| {
-                if let ChatDelta::Text(t) = delta {
-                    if let Ok(mut g) = captured_for_sink.lock() {
-                        g.push_str(&t);
+                match delta {
+                    ChatDelta::Text(t) => {
+                        if let Ok(mut g) = captured_for_sink.lock() {
+                            g.push_str(&t);
+                        }
+                        let _ = app.emit(
+                            &format!("ai:assistant_delta:{tab_id}"),
+                            json!({
+                                "id": sink_msg_id,
+                                "text": t,
+                                "context_epoch": context_epoch,
+                            }),
+                        );
                     }
-                    let _ = app.emit(
-                        &format!("ai:assistant_delta:{tab_id}"),
-                        json!({
-                            "id": sink_msg_id,
-                            "text": t,
-                            "context_epoch": context_epoch,
-                        }),
-                    );
+                    // 思考链增量：独立事件给前端折叠展示，绝不写进终端也不会
+                    // 进 captured（取消时 reasoning 如实只显示已发射的部分）。
+                    ChatDelta::Reasoning(r) => {
+                        let _ = app.emit(
+                            &format!("ai:assistant_reasoning_delta:{tab_id}"),
+                            json!({ "id": sink_msg_id, "reasoning": r }),
+                        );
+                    }
+                    _ => {}
                 }
             });
 
@@ -927,6 +938,7 @@ impl Actor {
                 json!({
                     "id": msg_id,
                     "text": resp.text,
+                    "reasoning": resp.reasoning_content,
                     "tokens_in": resp.tokens_in,
                     "tokens_out": resp.tokens_out,
                 }),
