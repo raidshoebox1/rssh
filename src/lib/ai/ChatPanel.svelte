@@ -379,6 +379,11 @@
     function isReasoningExpanded(id: string): boolean {
         return expandedReasoning.has(id);
     }
+    /** 思考链是否已完成：首个非空正文 chunk 到达（reasoningDone）即算完成，
+     *  不需要等整轮输出结束；无思考链的 item 不会走到这里。 */
+    function thinkingFinished(item: ChatItem): boolean {
+        return item.kind === "assistant" && (item.reasoningDone === true || !item.streaming);
+    }
 
     /** Close on outside click / Esc — BlockContextMenu already listens for this,
      *  so here we only reset our own state when it fires onClose. */
@@ -679,17 +684,19 @@
                         <div class="ts">{fmt(item.at)}</div>
                         {#if item.reasoning}
                             <!-- 思考链折叠块：只看 UI 层，绝不进入终端。折叠时显示
-                                 "> 思考中…"（流式）或 "> 思考过程"（完成后）；点击展开。 -->
+                                 "> 思考中…"（思考进行中）或 "> 思考过程"（思考完成）；
+                                 点击展开。思考完成的信号是首个非空正文 chunk 到达，
+                                 而不是整轮输出结束。 -->
                             <button class="thinking" class:open={isReasoningExpanded(item.id)}
                                     onclick={() => toggleReasoning(item.id)}
                                     aria-expanded={isReasoningExpanded(item.id)}
-                                    title={item.streaming
-                                        ? t("ai.bubble.thinking_tip_streaming")
-                                        : t("ai.bubble.thinking_tip_done")}>
-                                <span class="thinking-icon">">"</span>
-                                <span class="thinking-label">{item.streaming
-                                    ? t("ai.bubble.thinking_streaming")
-                                    : t("ai.bubble.thinking_done")}</span>
+                                    title={thinkingFinished(item)
+                                        ? t("ai.bubble.thinking_tip_done")
+                                        : t("ai.bubble.thinking_tip_streaming")}>
+                                <span class="thinking-icon">&gt;</span>
+                                <span class="thinking-label">{thinkingFinished(item)
+                                    ? t("ai.bubble.thinking_done")
+                                    : t("ai.bubble.thinking_streaming")}</span>
                                 <span class="thinking-chevron">{isReasoningExpanded(item.id) ? "▲" : "▼"}</span>
                             </button>
                             {#if isReasoningExpanded(item.id)}
