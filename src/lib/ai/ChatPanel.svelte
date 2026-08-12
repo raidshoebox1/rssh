@@ -458,10 +458,11 @@
 
     let inputAreaEl = $state<HTMLDivElement | null>(null);
 
-    /** Drag the handle above the composer to change its max-height. Mirrors the
-     *  AI panel width gesture: track start position, live-update during move,
-     *  persist once (global pref) on mouse-up. No Enter/newline involved — the
-     *  textarea still owns its own scrolling. */
+    /** Drag the handle above the composer to change its explicit height (the
+     *  textarea height — not max-height — so the box visibly grows/shrinks).
+     *  Mirrors the AI panel width gesture: track start position, live-update
+     *  during move, persist once (global pref) on mouse-up. No Enter/newline
+     *  involved — extra content scrolls inside the box. */
     function startInputResize(e: MouseEvent) {
         e.preventDefault();
         const startY = e.clientY;
@@ -674,7 +675,7 @@
             <textarea
                 bind:this={inputEl}
                 bind:value={inputText}
-                style="max-height: {ai.inputMaxHeight()}px;"
+                style="height: {ai.inputMaxHeight()}px; min-height: 36px;"
                 placeholder={busy ? (session ? t("ai.input.replying") : t("ai.input.starting")) : (streaming ? t("ai.input.replying") : t("ai.input.placeholder"))}
                 onkeydown={onKeyDown}
                 disabled={busy}
@@ -1016,13 +1017,14 @@
         opacity: 0.45;
     }
     textarea {
-        flex: 1; min-height: 36px; max-height: 120px; resize: none;
+        flex: 1; min-height: 36px; resize: none;
         padding: 6px 8px; border: 1px solid var(--divider);
         border-radius: 4px; background: var(--bg); color: var(--text);
         font-family: inherit; font-size: 13px;
-        /* The inline max-height from ai.inputMaxHeight() wins; this keeps the
-           default live while a fresh panel hasn't synced the pref yet. */
         box-sizing: border-box;
+        /* The inline height from ai.inputMaxHeight() drives the box height and
+           the resize handle; any extra content scrolls inside the box. */
+        overflow-y: auto;
     }
 
     /* Clear-context confirmation modal — shell lives in Modal.svelte, typography
