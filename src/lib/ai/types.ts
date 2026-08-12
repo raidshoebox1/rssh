@@ -124,7 +124,7 @@ export interface TokenUsage {
 /** 一条对话消息（前端展示用） */
 export type ChatItem =
   | { kind: "user"; client_id?: string; client_seq?: number; text: string; at: number }
-  | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean; cancelled?: boolean; reasoning?: string }
+  | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean; cancelled?: boolean; reasoning?: string; reasoningDone?: boolean }
   | { kind: "command"; cmd: CommandProposed; at: number; result?: CommandResult; rejected?: { reason: string } }
   | { kind: "error"; text: string; at: number }
   | { kind: "note"; text: string; at: number };

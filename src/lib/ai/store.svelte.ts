@@ -615,9 +615,14 @@ function serializeTimeline(items: ChatItem[]): string {
   // client_id/client_seq are live correlation metadata for pending mutations,
   // not conversation data. Keeping them out of storage also prevents a fresh
   // runtime's sequence counter from comparing against stale persisted values.
-  return JSON.stringify(items.map((item) => item.kind === "user"
-    ? { kind: "user", text: item.text, at: item.at }
-    : item));
+  // reasoningDone is the same kind of live mark (flips the "思考中…" label
+  // once the first content chunk lands) — meaningless once restored, so strip
+  // it too. restoreTimeline derives the label from stream=false afterwards.
+  return JSON.stringify(items.map((item) => item.kind === "assistant"
+    ? { ...item, reasoningDone: undefined }
+    : item.kind === "user"
+      ? { kind: "user", text: item.text, at: item.at }
+      : item));
 }
 
 function queueTimelinePersist(tab_id: string, id: string, timeline: string): Promise<void> {
@@ -1859,6 +1864,10 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
       const item = arr[i];
       if (item.kind === "assistant" && item.id === e.payload.id) {
         item.text += e.payload.text;
+        // 首个非空正文 chunk 到达 ⇒ 思考链已结束（reasoner 先想后答）。
+        // 置位后折叠块文案立刻从“思考中…”切到“思考过程”，不必等整轮
+        // 输出结束（message_end）才切换。
+        if (e.payload.text) item.reasoningDone = true;
         return;
       }
     }
