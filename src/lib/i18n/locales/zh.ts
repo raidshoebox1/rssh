@@ -546,6 +546,7 @@ const zh: Messages = {
   "ai.message.rollback_confirm_action": "回退",
   "ai.ctx.copy_markdown": "复制原始 Markdown",
   "ai.ctx.send_to_terminal": "发送到终端",
+  "ai.ctx.send_to_input": "发送到输入框",
   "ai.error.no_api_key": "请先到 设置 → AI 排障 配置 API key",
   "ai.placeholder.welcome": "直接说说怎么了",
   "ai.placeholder.example_hint": "例如：\"这台机器 CPU 飙到 100% 了\"、\"Java 进程内存涨得很猛\"。",
