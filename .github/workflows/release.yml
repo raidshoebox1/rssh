@@ -269,17 +269,11 @@ jobs:
           sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" tauri.conf.json
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
 
-      - name: Setup signing
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/release.jks
-          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
-            "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            "${{ secrets.ANDROID_KEY_ALIAS }}" \
-            "${{ secrets.ANDROID_KEY_PASSWORD }}" \
-            > src-tauri/gen/android/key.properties
-
+      # Debug APK: auto-signed with the Android SDK's debug.keystore, so no
+      # keystore secrets are required. Suitable for test/dev distribution only
+      # (isDebuggable + cleartext enabled) — not for Play Store release.
       - name: Build Android APK
-        run: npx tauri android build --apk
+        run: npx tauri android build --apk --debug
 
       - name: Rename APK
         shell: bash
