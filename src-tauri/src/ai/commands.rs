@@ -494,8 +494,8 @@ pub async fn ai_session_start_impl(
 
     let client = llm::build_client(&provider, api_key, endpoint)?;
 
-    // system prompt = 内置 general 规则集 + user-skill 目录（id + description）。
-    // user-skill 详细内容走 load_skill 工具按需加载（claude skills 模式），
+    // system prompt = 内置 general 规则集 + lazy Skill 目录（id + description）。
+    // 其它内置 Skill 和用户 Skill 走 load_skill 工具按需加载，
     // 用户写多个 skill 也不会让启动 prompt 爆炸。
     let _ = skill; // 前端不再选；保留参数兼容
     let locale_lbl = locale_label(locale.as_deref().unwrap_or("en"));
@@ -512,7 +512,7 @@ pub async fn ai_session_start_impl(
     //    stale front-end cache must not graft an SSH history onto a serial port.
     let target_key = conversation_target_key(state, &target)?;
     let is_new_conversation = resume.is_none();
-    let (conversation_id, initial_history) = match resume {
+    let (conversation_id, initial_history, initial_audit) = match resume {
         Some(id) => {
             // Claim before reading the row. Otherwise delete or another resume
             // can win the load-to-activation gap and leave two writers (or
@@ -530,12 +530,18 @@ pub async fn ai_session_start_impl(
                 serde_json::from_str(&row.history_json).map_err(|e| {
                     AppError::other("conversation_corrupt", json!({ "error": e.to_string() }))
                 })?;
-            (id, history)
+            // Audit is fail-soft: a corrupt/missing audit must NOT block the
+            // conversation (unlike history, which the LLM needs to continue).
+            // Fall back to an empty log — the panel just shows nothing for the
+            // old turns, and token totals start from 0 for this resumed session.
+            let audit: super::audit::AuditLog =
+                serde_json::from_str(&row.audit_json).unwrap_or_default();
+            (id, history, audit)
         }
         None => {
             let id = uuid::Uuid::new_v4().to_string();
             owner_reservation.claim_conversation(&id)?;
-            (id, Vec::new())
+            (id, Vec::new(), super::audit::AuditLog::default())
         }
     };
 
@@ -564,6 +570,7 @@ pub async fn ai_session_start_impl(
         conversation_id,
         target_key: target_key.clone(),
         initial_history,
+        initial_audit,
     };
 
     // 并发 start 防御：上方的 contains_key 检查到这里的 insert 之间夹着
@@ -1423,6 +1430,8 @@ pub struct AiSettings {
     pub auto_patch_modify: bool,
     pub auto_patch_diff: bool,
     pub auto_patch_mv: bool,
+    pub auto_web_search: bool,
+    pub auto_web_fetch: bool,
     /// 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开后跑探针。
     /// 详见 `key_auto_detect_remote_shell` 注释。
     pub auto_detect_remote_shell: bool,
@@ -1488,6 +1497,8 @@ pub async fn ai_settings_get_impl(
         auto_patch_modify: read_auto(state, "patch_modify")?,
         auto_patch_diff: read_auto(state, "patch_diff")?,
         auto_patch_mv: read_auto(state, "patch_mv")?,
+        auto_web_search: read_auto(state, "web_search")?,
+        auto_web_fetch: read_auto(state, "web_fetch")?,
         auto_detect_remote_shell,
     })
 }
@@ -1558,6 +1569,8 @@ pub struct AiSettingsPatch {
     pub auto_patch_modify: Option<bool>,
     pub auto_patch_diff: Option<bool>,
     pub auto_patch_mv: Option<bool>,
+    pub auto_web_search: Option<bool>,
+    pub auto_web_fetch: Option<bool>,
     pub auto_detect_remote_shell: Option<bool>,
 }
 
@@ -1582,6 +1595,8 @@ pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> A
         auto_patch_modify,
         auto_patch_diff,
         auto_patch_mv,
+        auto_web_search,
+        auto_web_fetch,
         auto_detect_remote_shell,
     } = patch;
     if let Some(p) = provider.as_ref() {
@@ -1624,6 +1639,8 @@ pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> A
         ("patch_modify", auto_patch_modify),
         ("patch_diff", auto_patch_diff),
         ("patch_mv", auto_patch_mv),
+        ("web_search", auto_web_search),
+        ("web_fetch", auto_web_fetch),
     ];
     for (name, val) in auto_writes {
         if let Some(on) = val {

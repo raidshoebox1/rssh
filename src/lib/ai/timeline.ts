@@ -4,13 +4,13 @@
  * live-only states that must not be resurrected verbatim:
  *
  * - assistant `streaming: true` → a blinking cursor with no stream behind it
- * - command cards with neither result nor rejection → approval buttons whose
- *   sentinel the restarted backend has never heard of
+ * - command / web_tool cards with neither result nor rejection → approval
+ *   buttons whose ack the restarted backend has never heard of
  *
  * Both are normalized here. Unknown/corrupt entries are dropped, not thrown:
  * a damaged blob should degrade to a shorter timeline, never block resume.
  */
-import type { ChatItem } from "./types.ts";
+import type { ChatItem, DownloadResult, AnalyzeResult, PtyExecution } from "./types.ts";
 
 export interface AiTerminalMutation {
   kind: string;
@@ -21,13 +21,34 @@ function isStr(v: unknown): v is string {
   return typeof v === "string";
 }
 
-/** Per-kind shape check — the fields the templates dereference unconditionally
- *  (renderMarkdown(text), fmt(at), CommandConfirmDialog's cmd.*). A known kind
- *  with a mangled body must be dropped here, not crash the panel at render
- *  time. Deliberately NOT a full schema: blobs are written by our own
- *  serializer, this guards against crashes and visible junk ("Invalid Date"),
- *  not against every cosmetic defect of a hand-corrupted row. */
-function isRenderable(item: ChatItem): boolean {
+/** Guarantee a PTY card's `execution` envelope exists, migrating the
+ *  pre-PtyExecution-split flat shape (full_cmd / sentinel / timeout_s at the
+ *  top level) if that's what the blob holds. CommandConfirmDialog /
+ *  PatchConfirmCard / MatchConfirmCard all dereference execution.timeout_s, so
+ *  without this a card of any lineage crashes the panel on resume. */
+function ensureExecution(obj: Record<string, unknown>): PtyExecution {
+  const ex = obj.execution;
+  if (ex && typeof ex === "object" && !Array.isArray(ex)) {
+    return ex as PtyExecution;
+  }
+  return {
+    full_cmd: isStr(obj.full_cmd) ? obj.full_cmd : "",
+    sentinel: isStr(obj.sentinel) ? obj.sentinel : "",
+    timeout_s: typeof obj.timeout_s === "number" ? obj.timeout_s : 0,
+  };
+}
+
+/** Structural check only — is this entry a card at all? A known kind, a numeric
+ *  timestamp, and the primary payload object the template dereferences (cmd for
+ *  command, proposal for the rest; text for bubbles). Missing domain FIELDS are
+ *  not validated here: they're normalized in restoreTimeline and render as-is
+ *  (empty shows empty).
+ *
+ *  This replaces the old per-field validator. Validation was fragile — it had
+ *  to mirror every template dereference exactly, and the single one it missed
+ *  (cmd.execution) crashed the whole panel. Normalization makes that class of
+ *  bug impossible: a missed default renders blank instead of throwing. */
+function isCard(item: ChatItem): boolean {
   if (typeof item.at !== "number") return false;
   switch (item.kind) {
     case "user":
@@ -37,10 +58,13 @@ function isRenderable(item: ChatItem): boolean {
     case "assistant":
       return isStr(item.id) && isStr(item.text);
     case "command":
-      return (
-        !!item.cmd && typeof item.cmd === "object" &&
-        isStr(item.cmd.id) && isStr(item.cmd.cmd)
-      );
+      return !!item.cmd && typeof item.cmd === "object";
+    case "patch":
+    case "match":
+    case "download":
+    case "analyze":
+    case "web_tool":
+      return !!item.proposal && typeof item.proposal === "object";
     default:
       return false;
   }
@@ -59,7 +83,7 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
   for (const raw of parsed) {
     if (!raw || typeof raw !== "object") continue;
     const item = raw as ChatItem;
-    if (!isRenderable(item)) continue;
+    if (!isCard(item)) continue;
     if (item.kind === "user") {
       // client_id/client_seq only correlate optimistic mutations in the live
       // renderer. Old versions persisted them, but carrying those sequence
@@ -76,16 +100,37 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
       if (!item.text && !item.cancelled) continue;
       item.streaming = false;
     } else if (item.kind === "command") {
-      // The one method-call crash vector in CommandConfirmDialog: a truthy
-      // non-string diff hits `cmd.diff.split()`. Strip rather than drop —
-      // the card is still meaningful without its diff preview. Every other
-      // cmd/result/rejected field is either plain-rendered (Svelte renders
-      // undefined as "") or crash-safe, and the action-button branch is
-      // unreachable for restored cards (stale-marking below guarantees
-      // result|rejected).
-      if (item.cmd.diff !== undefined && !isStr(item.cmd.diff)) {
-        delete item.cmd.diff;
+      // Normalize the execution envelope. Covers every command card of any
+      // lineage — run_command, plus the legacy match_file / patch×4 /
+      // download_file / analyze_locally command cards from before those tools
+      // got their own ChatItem kinds. They all render as command cards now:
+      // their explain/cmd text carries the history, and the domain fields that
+      // were never structured on the old shape simply show empty.
+      const cmd = item.cmd as unknown as Record<string, unknown>;
+      cmd.execution = ensureExecution(cmd);
+      if (!item.result && !item.rejected) {
+        item.rejected = { reason: staleCommandReason };
       }
+    } else if (item.kind === "patch") {
+      const proposal = item.proposal as unknown as Record<string, unknown>;
+      proposal.execution = ensureExecution(proposal);
+      // A truthy non-string diff would hit proposal.diff.split() in the mv
+      // card. Strip rather than crash.
+      if (proposal.diff !== undefined && !isStr(proposal.diff)) {
+        delete proposal.diff;
+      }
+      if (!item.result && !item.rejected) {
+        item.rejected = { reason: staleCommandReason };
+      }
+    } else if (item.kind === "match") {
+      const proposal = item.proposal as unknown as Record<string, unknown>;
+      proposal.execution = ensureExecution(proposal);
+      if (!item.result && !item.rejected) {
+        item.rejected = { reason: staleCommandReason };
+      }
+    } else if (item.kind === "web_tool" || item.kind === "download" || item.kind === "analyze") {
+      // An unresolved card belongs to a dead actor whose approval ack it will
+      // never receive. Mark stale-rejected.
       if (!item.result && !item.rejected) {
         item.rejected = { reason: staleCommandReason };
       }
@@ -99,7 +144,8 @@ export function restoreTimeline(json: string, staleCommandReason: string): ChatI
  * private timeline snapshot. The actor records these before emitting them, and
  * prepare-stop returns them only after the actor drains. Event callbacks may
  * therefore arrive before or after the invoke reply without changing the
- * persisted result. Every mutation is keyed by message/card id and idempotent. */
+ * persisted result. Every mutation is keyed by message/card/activity id and
+ * idempotent. */
 export function applyTerminalMutations(
   source: ChatItem[],
   mutations: readonly AiTerminalMutation[],
@@ -143,14 +189,14 @@ export function applyTerminalMutations(
       continue;
     }
 
-    const index = findLastIndex(items, (item) =>
-      item.kind === "command" && item.cmd.id === payload.id);
-    if (index < 0) continue;
-    const item = items[index];
-    if (item.kind !== "command") continue;
-
     if (mutation.kind === "command_rejected") {
       if (!isStr(payload.reason)) continue;
+      // Reject covers both command and web_tool cards (shared reject channel
+      // by id).
+      const index = findLastIndex(items, (item) => cardId(item) === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "command" && item.kind !== "web_tool" && item.kind !== "download" && item.kind !== "analyze" && item.kind !== "patch" && item.kind !== "match") continue;
       items = replaceAt(items, index, {
         ...item,
         result: undefined,
@@ -158,6 +204,143 @@ export function applyTerminalMutations(
       });
       continue;
     }
+
+    if (mutation.kind === "web_tool_completed") {
+      if (
+        typeof payload.ok !== "boolean"
+        || !isStr(payload.summary)
+        || typeof payload.duration_ms !== "number"
+      ) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "web_tool" && item.proposal.id === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "web_tool") continue;
+      items = replaceAt(items, index, {
+        ...item,
+        rejected: undefined,
+        result: {
+          id: payload.id,
+          ok: payload.ok,
+          summary: payload.summary,
+          duration_ms: payload.duration_ms,
+        },
+      });
+      continue;
+    }
+
+    if (mutation.kind === "download_completed") {
+      if (
+        typeof payload.ok !== "boolean"
+        || !isStr(payload.summary)
+        || typeof payload.duration_ms !== "number"
+      ) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "download" && item.proposal.id === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "download") continue;
+      const result: DownloadResult = {
+        id: payload.id,
+        ok: payload.ok,
+        local_path: isStr(payload.local_path) ? payload.local_path : undefined,
+        bytes: typeof payload.bytes === "number" ? payload.bytes : undefined,
+        summary: payload.summary,
+        duration_ms: payload.duration_ms,
+      };
+      items = replaceAt(items, index, { ...item, rejected: undefined, result });
+      continue;
+    }
+
+    if (mutation.kind === "analyze_completed") {
+      if (
+        typeof payload.ok !== "boolean"
+        || !isStr(payload.summary)
+        || typeof payload.duration_ms !== "number"
+      ) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "analyze" && item.proposal.id === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "analyze") continue;
+      items = replaceAt(items, index, {
+        ...item,
+        rejected: undefined,
+        result: {
+          id: payload.id,
+          ok: payload.ok,
+          summary: payload.summary,
+          duration_ms: payload.duration_ms,
+        },
+      });
+      continue;
+    }
+
+    if (mutation.kind === "patch_completed") {
+      // Same PTY-execution result shape as command_completed; matches patch
+      // cards (reuses executeCommand, so the registry is shared by id).
+      if (
+        typeof payload.exit_code !== "number"
+        || typeof payload.timed_out !== "boolean"
+        || typeof payload.duration_ms !== "number"
+        || !isStr(payload.output)
+        || typeof payload.original_bytes !== "number"
+        || typeof payload.truncated_bytes !== "number"
+      ) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "patch" && item.proposal.id === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "patch") continue;
+      items = replaceAt(items, index, {
+        ...item,
+        rejected: undefined,
+        result: {
+          id: payload.id,
+          exit_code: payload.exit_code,
+          timed_out: payload.timed_out,
+          early_terminated: payload.early_terminated === true,
+          duration_ms: payload.duration_ms,
+          output: payload.output,
+          original_bytes: payload.original_bytes,
+          truncated_bytes: payload.truncated_bytes,
+        },
+      });
+      continue;
+    }
+
+    if (mutation.kind === "match_completed") {
+      // Same PTY-execution result shape; matches match cards.
+      if (
+        typeof payload.exit_code !== "number"
+        || typeof payload.timed_out !== "boolean"
+        || typeof payload.duration_ms !== "number"
+        || !isStr(payload.output)
+        || typeof payload.original_bytes !== "number"
+        || typeof payload.truncated_bytes !== "number"
+      ) continue;
+      const index = findLastIndex(items, (item) =>
+        item.kind === "match" && item.proposal.id === payload.id);
+      if (index < 0) continue;
+      const item = items[index];
+      if (item.kind !== "match") continue;
+      items = replaceAt(items, index, {
+        ...item,
+        rejected: undefined,
+        result: {
+          id: payload.id,
+          exit_code: payload.exit_code,
+          timed_out: payload.timed_out,
+          early_terminated: payload.early_terminated === true,
+          duration_ms: payload.duration_ms,
+          output: payload.output,
+          original_bytes: payload.original_bytes,
+          truncated_bytes: payload.truncated_bytes,
+        },
+      });
+      continue;
+    }
+
     if (mutation.kind !== "command_completed") continue;
     if (
       typeof payload.exit_code !== "number"
@@ -167,6 +350,11 @@ export function applyTerminalMutations(
       || typeof payload.original_bytes !== "number"
       || typeof payload.truncated_bytes !== "number"
     ) continue;
+    const index = findLastIndex(items, (item) =>
+      item.kind === "command" && item.cmd.id === payload.id);
+    if (index < 0) continue;
+    const item = items[index];
+    if (item.kind !== "command") continue;
     items = replaceAt(items, index, {
       ...item,
       rejected: undefined,
@@ -185,9 +373,12 @@ export function applyTerminalMutations(
   // prepare-stop has drained the actor: no stream can still produce deltas.
   // If the actor panicked before recording its terminal event, persist the
   // partial bubble as cancelled instead of resurrecting a permanent cursor.
-  return items.map((item) => item.kind === "assistant" && item.streaming
-    ? { ...item, streaming: false, cancelled: true }
-    : item);
+  return items.map((item) => {
+    if (item.kind === "assistant" && item.streaming) {
+      return { ...item, streaming: false, cancelled: true };
+    }
+    return item;
+  });
 }
 
 function findLastIndex(
@@ -202,4 +393,11 @@ function findLastIndex(
 
 function replaceAt(items: ChatItem[], index: number, item: ChatItem): ChatItem[] {
   return [...items.slice(0, index), item, ...items.slice(index + 1)];
+}
+
+/** Card id of a proposal-bearing ChatItem (command or web_tool), else null. */
+function cardId(item: ChatItem): string | null {
+  if (item.kind === "command") return item.cmd.id;
+  if (item.kind === "web_tool" || item.kind === "download" || item.kind === "analyze" || item.kind === "patch" || item.kind === "match") return item.proposal.id;
+  return null;
 }

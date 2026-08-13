@@ -6,15 +6,15 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub at: DateTime<Utc>,
     pub kind: AuditKind,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditKind {
     SessionStarted {
@@ -22,12 +22,15 @@ pub enum AuditKind {
         target: String, // ssh:<id> 或 local:<id>
     },
     SessionEnded,
+    /// User input (redacted). The audit panel's "who asked what" flow. Redacted
+    /// to keep the export safe — same contract as CommandExecuted.output_redacted.
+    UserMessage {
+        content: String,
+    },
     LlmRequest {
         model: String,
-        redacted_payload: String,
     },
     LlmResponse {
-        text: String,
         tokens_in: Option<u32>,
         tokens_out: Option<u32>,
     },
@@ -75,6 +78,18 @@ pub enum AuditKind {
         id: String,
         name: String,
     },
+    WebFetchCompleted {
+        requested_url: String,
+        final_url: String,
+        source_bytes: usize,
+        truncated: bool,
+    },
+    WebSearchCompleted {
+        query: String,
+        provider: String,
+        response_bytes: usize,
+        duration_ms: u64,
+    },
     ContextRolledBack {
         /// Zero-based index among user messages in the active context.
         user_message_index: usize,
@@ -88,7 +103,7 @@ pub enum AuditKind {
     },
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuditLog {
     pub entries: Vec<AuditEntry>,
 }
@@ -116,17 +131,10 @@ impl AuditLog {
                     s.push_str(&format!("SESSION_STARTED  skill={skill} target={target}\n"));
                 }
                 AuditKind::SessionEnded => s.push_str("SESSION_ENDED\n"),
-                AuditKind::LlmRequest {
-                    model,
-                    redacted_payload,
-                } => {
+                AuditKind::LlmRequest { model } => {
                     s.push_str(&format!("LLM_REQUEST      model={model}\n"));
-                    s.push_str("---PAYLOAD (脱敏后)---\n");
-                    s.push_str(redacted_payload);
-                    s.push_str("\n---END---\n");
                 }
                 AuditKind::LlmResponse {
-                    text,
                     tokens_in,
                     tokens_out,
                 } => {
@@ -135,8 +143,11 @@ impl AuditLog {
                         fmt_opt(tokens_in),
                         fmt_opt(tokens_out)
                     ));
-                    s.push_str("---TEXT---\n");
-                    s.push_str(text);
+                }
+                AuditKind::UserMessage { content } => {
+                    s.push_str("USER_MESSAGE\n");
+                    s.push_str("---CONTENT (脱敏后)---\n");
+                    s.push_str(content);
                     s.push_str("\n---END---\n");
                 }
                 AuditKind::CommandProposed {
@@ -200,6 +211,27 @@ impl AuditLog {
                 }
                 AuditKind::SkillLoaded { id, name } => {
                     s.push_str(&format!("SKILL_LOADED     id={id} name={name}\n"));
+                }
+                AuditKind::WebFetchCompleted {
+                    requested_url,
+                    final_url,
+                    source_bytes,
+                    truncated,
+                } => {
+                    s.push_str(&format!(
+                        "WEB_FETCH_DONE   requested={requested_url} final={final_url} bytes={source_bytes} truncated={truncated}\n"
+                    ));
+                }
+                AuditKind::WebSearchCompleted {
+                    query,
+                    provider,
+                    response_bytes,
+                    duration_ms,
+                } => {
+                    let query = query.replace(['\r', '\n'], " ");
+                    s.push_str(&format!(
+                        "WEB_SEARCH_DONE  provider={provider} bytes={response_bytes} dur={duration_ms}ms query={query}\n"
+                    ));
                 }
                 AuditKind::ContextRolledBack {
                     user_message_index,
@@ -276,6 +308,13 @@ mod tests {
         assert_eq!(skill["type"], "skill_loaded");
         assert_eq!(skill["name"], "CPU 排查");
 
+        let user_msg = serde_json::to_value(AuditKind::UserMessage {
+            content: "why is cpu 100%".into(),
+        })
+        .unwrap();
+        assert_eq!(user_msg["type"], "user_message");
+        assert_eq!(user_msg["content"], "why is cpu 100%");
+
         let analyze = serde_json::to_value(AuditKind::AnalyzeProposed {
             id: "a1".into(),
             local_path: "/tmp/h.hprof".into(),
@@ -293,6 +332,27 @@ mod tests {
         assert_eq!(rollback["type"], "context_rolled_back");
         assert_eq!(rollback["user_message_index"], 1);
         assert_eq!(rollback["dropped_messages"], 4);
+
+        let fetched = serde_json::to_value(AuditKind::WebFetchCompleted {
+            requested_url: "https://example.com/start".into(),
+            final_url: "https://example.com/final".into(),
+            source_bytes: 42,
+            truncated: false,
+        })
+        .unwrap();
+        assert_eq!(fetched["type"], "web_fetch_completed");
+        assert_eq!(fetched["source_bytes"], 42);
+
+        let searched = serde_json::to_value(AuditKind::WebSearchCompleted {
+            query: "rust async".into(),
+            provider: "parallel".into(),
+            response_bytes: 512,
+            duration_ms: 123,
+        })
+        .unwrap();
+        assert_eq!(searched["type"], "web_search_completed");
+        assert_eq!(searched["provider"], "parallel");
+        assert_eq!(searched["response_bytes"], 512);
     }
 
     #[test]

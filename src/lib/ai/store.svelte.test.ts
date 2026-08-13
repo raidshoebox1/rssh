@@ -1952,16 +1952,14 @@ describe("tab lifecycle", () => {
       id: "command-ack-race",
       tool_call_id: "tool-ack-race",
       cmd: "show version",
-      full_cmd: "show version",
-      sentinel: "unused-for-raw-device",
       explain: "",
       side_effect: "",
-      timeout_s: 30,
+      execution: { full_cmd: "show version", sentinel: "unused-for-raw-device", timeout_s: 30 },
       kind: "run_command" as const,
     };
     proposedListener?.({ payload: proposed });
     const session = { tabId: "tab-a", instanceId: "instance-a" };
-    const executing = ai.executeCommand(session, proposed, "telnet", "raw-target");
+    const executing = ai.executeCommand(session, proposed.id, proposed.execution, "telnet", "raw-target");
     await vi.waitFor(() => expect(ai.isCommandRunning(session, "command-ack-race")).toBe(true));
     const submitting = ai.submitCommand(session, "command-ack-race");
     await vi.waitFor(() => expect(ai.commandExecutionStatus(session, "command-ack-race"))
@@ -2138,13 +2136,11 @@ describe("executeCommand", () => {
       id: "cmd-close",
       tool_call_id: "tool-close",
       cmd: "show version",
-      full_cmd: "show version",
-      sentinel: "unused-for-raw-device",
       explain: "",
       side_effect: "none",
-      timeout_s: 30,
+      execution: { full_cmd: "show version", sentinel: "unused-for-raw-device", timeout_s: 30 },
     };
-    const running = ai.executeCommand(session, proposed, kind, "raw-target");
+    const running = ai.executeCommand(session, proposed.id, proposed.execution, kind, "raw-target");
     await vi.waitFor(() => expect(ai.isCommandRunning(session, "cmd-close")).toBe(true));
 
     await ai.closePanel("tab-a");
@@ -2185,14 +2181,12 @@ describe("executeCommand", () => {
       id: "cmd-once",
       tool_call_id: "tool-once",
       cmd: "dangerous command",
-      full_cmd: "dangerous command",
-      sentinel: "unused-for-telnet",
       explain: "",
       side_effect: "destructive",
-      timeout_s: 30,
+      execution: { full_cmd: "dangerous command", sentinel: "unused-for-telnet", timeout_s: 30 },
     };
 
-    const running = ai.executeCommand(session, proposed, "telnet", "target-1");
+    const running = ai.executeCommand(session, proposed.id, proposed.execution, "telnet", "target-1");
     await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       "telnet_write_line",
       { sessionId: "target-1", text: "dangerous command" },
@@ -2202,7 +2196,7 @@ describe("executeCommand", () => {
     await expect(submitting).rejects.toThrow("result store unavailable");
     expect(ai.commandExecutionStatus(session, "cmd-once")).toBe("delivery_failed");
 
-    await ai.executeCommand(session, proposed, "telnet", "target-1");
+    await ai.executeCommand(session, proposed.id, proposed.execution, "telnet", "target-1");
 
     expect(invokeMock.mock.calls.filter(
       ([command]) => command === "telnet_write_line",
@@ -2221,14 +2215,12 @@ describe("executeCommand", () => {
       id,
       tool_call_id: "patch-tool",
       cmd: id,
-      full_cmd: id,
-      sentinel: "unused-for-telnet",
       explain: "",
       side_effect: "",
-      timeout_s: 30,
+      execution: { full_cmd: id, sentinel: "unused-for-telnet", timeout_s: 30 },
     });
 
-    const first = ai.executeCommand(session, proposed("patch-cp"), "telnet", "target-1");
+    const first = ai.executeCommand(session, proposed("patch-cp").id, proposed("patch-cp").execution, "telnet", "target-1");
     await vi.waitFor(() => expect(ai.isCommandRunning(session, "patch-cp")).toBe(true));
     await ai.submitCommand(session, "patch-cp");
     await first;
@@ -2237,7 +2229,7 @@ describe("executeCommand", () => {
     // The first card deliberately remains in the delivered registry: its
     // command_completed callback has not run yet. A later card from the same
     // patch_file tool call must still own a fresh transport slot.
-    const second = ai.executeCommand(session, proposed("patch-modify"), "telnet", "target-1");
+    const second = ai.executeCommand(session, proposed("patch-modify").id, proposed("patch-modify").execution, "telnet", "target-1");
     await vi.waitFor(() => expect(ai.isCommandRunning(session, "patch-modify")).toBe(true));
     await ai.submitCommand(session, "patch-modify");
     await second;
@@ -2266,20 +2258,18 @@ describe("executeCommand", () => {
       id: "cmd-shared",
       tool_call_id: "call-0",
       cmd: "show version",
-      full_cmd: "show version",
-      sentinel: "unused-for-raw-devices",
       explain: "",
       side_effect: "none",
-      timeout_s: 30,
+      execution: { full_cmd: "show version", sentinel: "unused-for-raw-devices", timeout_s: 30 },
     };
     const sessionA = { tabId: "tab-a", instanceId: "instance-a" };
     const sessionB = { tabId: "tab-b", instanceId: "instance-b" };
 
-    const runningA = ai.executeCommand(sessionA, proposed, "telnet", "target-a");
+    const runningA = ai.executeCommand(sessionA, proposed.id, proposed.execution, "telnet", "target-a");
     await vi.waitFor(() => expect(ai.isCommandRunning(sessionA, "cmd-shared")).toBe(true));
 
     expect(ai.isCommandRunning(sessionB, "cmd-shared")).toBe(false);
-    const runningB = ai.executeCommand(sessionB, proposed, "telnet", "target-b");
+    const runningB = ai.executeCommand(sessionB, proposed.id, proposed.execution, "telnet", "target-b");
     await vi.waitFor(() => expect(ai.isCommandRunning(sessionB, "cmd-shared")).toBe(true));
 
     await ai.submitCommand(sessionB, "cmd-shared");
@@ -2298,11 +2288,9 @@ describe("executeCommand", () => {
       id: "cmd-race",
       tool_call_id: "tool-race",
       cmd: "echo unsafe",
-      full_cmd: "echo unsafe; printf sentinel",
-      sentinel: "sentinel",
       explain: "",
       side_effect: "none",
-      timeout_s: 30,
+      execution: { full_cmd: "echo unsafe; printf sentinel", sentinel: "sentinel", timeout_s: 30 },
     };
 
     const lateUnlisten = vi.fn();
@@ -2312,13 +2300,13 @@ describe("executeCommand", () => {
     }));
 
     const session = { tabId: "tab-1", instanceId: "instance-1" };
-    const running = ai.executeCommand(session, proposed, "local", "session-1");
+    const running = ai.executeCommand(session, proposed.id, proposed.execution, "local", "session-1");
     await vi.waitFor(() => expect(ai.isCommandRunning(session, "cmd-race")).toBe(true));
     await ai.terminateCommand(session, "cmd-race");
     resolveListen(lateUnlisten);
     await running;
 
-    const fullCommandData = Array.from(new TextEncoder().encode(`${proposed.full_cmd}\r`));
+    const fullCommandData = Array.from(new TextEncoder().encode(`${proposed.execution.full_cmd}\r`));
     expect(lateUnlisten).toHaveBeenCalledOnce();
     expect(invokeMock).not.toHaveBeenCalledWith("pty_write", {
       sessionId: "session-1",
@@ -2334,15 +2322,13 @@ describe("executeCommand", () => {
       id: "cmd-1",
       tool_call_id: "tool-1",
       cmd: "show version",
-      full_cmd: "show version",
-      sentinel: "unused-for-telnet",
       explain: "",
       side_effect: "none",
-      timeout_s: 30,
+      execution: { full_cmd: "show version", sentinel: "unused-for-telnet", timeout_s: 30 },
     };
 
     const session = { tabId: "tab-1", instanceId: "instance-1" };
-    const running = ai.executeCommand(session, proposed, "telnet", "session-1");
+    const running = ai.executeCommand(session, proposed.id, proposed.execution, "telnet", "session-1");
     await vi.waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("telnet_write_line", {
         sessionId: "session-1",
@@ -2351,5 +2337,56 @@ describe("executeCommand", () => {
     });
     await ai.submitCommand(session, "cmd-1");
     await running;
+  });
+
+  it("wraps the paste in bracketed-paste markers when the shell enabled DECSET 2004", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    // Register a live provider on the SAME module instance store.svelte.ts
+    // imports (resetModules re-imported both).
+    const { registerBracketedPasteProvider } = await import("../terminal/bracketed-paste.ts");
+    registerBracketedPasteProvider("tab-1", () => true);
+
+    const proposed = {
+      id: "cmd-bp",
+      tool_call_id: "t",
+      cmd: "ls -la",
+      explain: "",
+      side_effect: "",
+      execution: { full_cmd: "ls -la", sentinel: "unused-for-telnet", timeout_s: 30 },
+    };
+    const session = { tabId: "tab-1", instanceId: "instance-1" };
+    const running = ai.executeCommand(session, proposed.id, proposed.execution, "telnet", "session-1");
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("telnet_write_line", {
+        sessionId: "session-1",
+        text: "\x1b[200~ls -la\x1b[201~",
+      });
+    });
+    await ai.submitCommand(session, "cmd-bp");
+    await running;
+  });
+});
+
+describe("sumAuditTokens", () => {
+  it("sums llm_response token counts and skips other entries and nulls", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    const audit = {
+      entries: [
+        { at: "1", kind: { type: "user_message", content: "hi" } },
+        { at: "2", kind: { type: "llm_response", tokens_in: 100, tokens_out: 50 } },
+        { at: "3", kind: { type: "llm_response", tokens_in: null, tokens_out: null } },
+        { at: "4", kind: { type: "llm_response", tokens_in: 200, tokens_out: 30 } },
+        { at: "5", kind: { type: "session_ended" } },
+      ],
+    };
+    expect(ai.sumAuditTokens(audit as never)).toEqual({ tokens_in: 300, tokens_out: 80 });
+  });
+
+  it("returns zeros when there are no llm_response entries", async () => {
+    vi.resetModules();
+    const ai = await import("./store.svelte.ts");
+    expect(ai.sumAuditTokens({ entries: [] } as never)).toEqual({ tokens_in: 0, tokens_out: 0 });
   });
 });

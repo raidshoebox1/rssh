@@ -31,14 +31,32 @@ import type {
   CategoryGroup,
   CommandResult,
   ConversationMeta,
+  PtyExecution,
   LlmProvider,
   ModelInfo,
   RedactRuleRecord,
   ShellKind,
   SkillRecord,
   TokenUsage,
+  WebToolProposal,
+  WebToolResult,
+  DownloadProposal,
+  DownloadResult,
+  AnalyzeProposal,
+  AnalyzeResult,
+  PatchProposal,
+  MatchProposal,
 } from "./types.ts";
 import { isRawDeviceKind } from "./types.ts";
+import { bracketedPasteEnabled } from "../terminal/bracketed-paste.ts";
+
+/** DECSET 2004 bracketed-paste markers. When the target shell has enabled
+ *  bracketed paste, a paste is wrapped so zsh/bash/PowerShell treat it as one
+ *  atomic insert instead of parsing it char-by-char through the line editor —
+ *  which is what mangles long pasted commands (file_ops' ansi_c_quoted python)
+ *  and leaves the card stuck in "Executing". */
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 
 // ─── Position ────────────────────────────────────────────────────
 // 只支持 left/right。移动端用户横屏即可用——左右布局就够了，没必要再开上下分支。
@@ -325,6 +343,22 @@ export function isKeyboardLocked(tab_id: string): boolean {
 }
 export function tokenUsage(tab_id: string): TokenUsage {
   return _tokensByTab[tab_id] ?? { tokens_in: 0, tokens_out: 0 };
+}
+
+/** Sum token spend across an audit log. LlmResponse entries carry the only
+ *  authoritative per-turn token counts (history doesn't), so this is the single
+ *  source for rebuilding a resumed session's toolbar total. Entries with null
+ *  token fields (e.g. some OpenAI streams that omit usage) contribute 0. */
+export function sumAuditTokens(audit: AuditLog): TokenUsage {
+  let tin = 0;
+  let tout = 0;
+  for (const e of audit.entries) {
+    if (e.kind.type === "llm_response") {
+      tin += e.kind.tokens_in ?? 0;
+      tout += e.kind.tokens_out ?? 0;
+    }
+  }
+  return { tokens_in: tin, tokens_out: tout };
 }
 
 function pushChat(tab_id: string, item: ChatItem, persist = true) {
@@ -722,6 +756,23 @@ async function launchSessionAtGeneration(
     _targetKindByTab[info.tab_id] = args.targetKind;
     _chatByTab[info.tab_id] = timeline;
     initializeContextEpoch({ tabId: info.tab_id, instanceId: info.instance_id });
+    // Rebuild token totals BEFORE attaching listeners: the audit is still the
+    // resume snapshot here (initial_audit + SessionStarted, no live events
+    // yet), so sumAuditTokens can't race an assistant_message_end incrementing
+    // the same counter once listeners go live.
+    if (resumeId) {
+      try {
+        const audit = await getAudit({ tabId: info.tab_id, instanceId: info.instance_id });
+        if (isTabLive(args.tabId, generation)) {
+          const spent = sumAuditTokens(audit);
+          if (spent.tokens_in || spent.tokens_out) {
+            _tokensByTab[info.tab_id] = spent;
+          }
+        }
+      } catch {
+        // audit empty / actor raced — leave tokens at 0; non-fatal.
+      }
+    }
     await attachListeners(info, generation);
     assertTabLive(args.tabId, generation);
     return info;
@@ -1336,14 +1387,20 @@ function clearCommandExecutionsForSession(session: SessionInstanceRef): void {
 }
 
 /**
- * Execute an AI-proposed command: paste `full_cmd` (with sentinel +
- * exit-code echo) into the active terminal, watch the PTY stream for
- * the sentinel, then report output + exit code to the backend. All
+ * Execute an AI-proposed PTY command: paste `execution.full_cmd` (with
+ * sentinel + exit-code echo) into the active terminal, watch the PTY stream
+ * for the sentinel, then report output + exit code to the backend. All
  * front-end; the backend's ai module never executes commands itself.
+ *
+ * Takes the execution envelope directly (not a CommandProposed) so every PTY
+ * tool — run_command / match_file / patch×4 — reuses this same runner by
+ * handing its own `execution` field. `cardId` is the per-card id shared with
+ * the proposal/result events.
  */
 export async function executeCommand(
   session: SessionInstanceRef,
-  proposed: CommandProposed,
+  cardId: string,
+  execution: PtyExecution,
   target_kind: AiTargetKind,
   target_session_id: string,
 ): Promise<void> {
@@ -1354,7 +1411,7 @@ export async function executeCommand(
   // listener + timer would leak when `_commandExecutions.set` below overwrites
   // the entry. The map is the single source of truth for "in flight" — honor it.
   // Once transport has run, a retry can only redeliver its recorded result.
-  const executionKey = sessionCommandKey(session, proposed.id);
+  const executionKey = sessionCommandKey(session, cardId);
   const existing = _commandExecutions.get(executionKey);
   if (existing) {
     switch (existing.status) {
@@ -1395,7 +1452,7 @@ export async function executeCommand(
 
   const exec: Execution = {
     key: executionKey,
-    commandId: proposed.id,
+    commandId: cardId,
     tabId: session.tabId,
     instanceId: session.instanceId,
     targetSessionId: target_session_id,
@@ -1503,7 +1560,7 @@ export async function executeCommand(
       // Raw devices (serial/telnet) have no sentinel — just accumulate.
       // Completion comes from the user (submit) or the safety timeout below.
       if (isRawDeviceKind(target_kind)) return;
-      const hit = findSentinel(exec.buffer.view(), proposed.sentinel);
+      const hit = findSentinel(exec.buffer.view(), execution.sentinel);
       if (hit) void finish(hit.output, hit.exitCode, false);
     });
     // close/terminate may have won while listen() was registering. Never paste
@@ -1529,10 +1586,16 @@ export async function executeCommand(
   // already registered → must funnel through finish() to clean up, else
   // isCommandRunning() stays true forever.
   try {
+    // Wrap in bracketed-paste markers when the target shell enabled DECSET
+    // 2004 — same as the terminal's manual paste. The submit `\r` stays
+    // OUTSIDE the markers so the shell runs the pasted line (inside the
+    // markers it'd be part of the paste buffer and never execute).
+    const bp = bracketedPasteEnabled(session.tabId);
+    const body = bp ? `${PASTE_START}${execution.full_cmd}${PASTE_END}` : execution.full_cmd;
     if (target_kind === "telnet") {
-      await invoke("telnet_write_line", { sessionId: target_session_id, text: proposed.full_cmd });
+      await invoke("telnet_write_line", { sessionId: target_session_id, text: body });
     } else {
-      const data = Array.from(new TextEncoder().encode(proposed.full_cmd + "\r"));
+      const data = Array.from(new TextEncoder().encode(body + "\r"));
       await invoke(writeCmd, { sessionId: target_session_id, data });
     }
   } catch (e) {
@@ -1546,7 +1609,7 @@ export async function executeCommand(
   if (exec.status !== "running") return done;
   exec.timer = window.setTimeout(() => {
     void finish(extractOutput(exec.buffer.view(), undefined, dropEcho), -1, true);
-  }, Math.max(1000, proposed.timeout_s * 1000)) as unknown as number;
+  }, Math.max(1000, execution.timeout_s * 1000)) as unknown as number;
 
   return done;
 }
@@ -1632,6 +1695,8 @@ type AiSettingsPatch = Partial<{
   autoPatchModify: boolean;
   autoPatchDiff: boolean;
   autoPatchMv: boolean;
+  autoWebSearch: boolean;
+  autoWebFetch: boolean;
   autoDetectRemoteShell: boolean;
 }>;
 
@@ -1644,7 +1709,9 @@ type AutoApprovalSettingKey =
   | "auto_patch_cp"
   | "auto_patch_modify"
   | "auto_patch_diff"
-  | "auto_patch_mv";
+  | "auto_patch_mv"
+  | "auto_web_search"
+  | "auto_web_fetch";
 
 const AUTO_APPROVAL_PATCH_FIELDS = [
   ["dangerMode", "danger_mode"],
@@ -1656,6 +1723,8 @@ const AUTO_APPROVAL_PATCH_FIELDS = [
   ["autoPatchModify", "auto_patch_modify"],
   ["autoPatchDiff", "auto_patch_diff"],
   ["autoPatchMv", "auto_patch_mv"],
+  ["autoWebSearch", "auto_web_search"],
+  ["autoWebFetch", "auto_web_fetch"],
 ] as const satisfies ReadonlyArray<readonly [keyof AiSettingsPatch, AutoApprovalSettingKey]>;
 
 // A disable is a safety action, not merely a persisted preference. Keep its
@@ -1694,18 +1763,47 @@ function releaseEnabledAutoApprovals(patch: AiSettingsPatch): void {
   }
 }
 
+/** The auto-approval kind key for a tool card, or null for non-tool items.
+ *  Covers every card type so a danger-mode toggle revokes pending approvals
+ *  across the whole chat, not just run_command cards. */
+function cardAutoApprovalKind(item: ChatItem): string | null {
+  switch (item.kind) {
+    case "command": return item.cmd.kind ?? "run_command";
+    case "web_tool": return item.proposal.kind;
+    case "patch": return `patch_${item.proposal.step}`;
+    case "match": return "match_file";
+    case "download": return "download_file";
+    case "analyze": return "analyze_locally";
+    default: return null;
+  }
+}
+
+function cardId(item: ChatItem): string | null {
+  switch (item.kind) {
+    case "command": return item.cmd.id;
+    case "web_tool":
+    case "patch":
+    case "match":
+    case "download":
+    case "analyze":
+      return item.proposal.id;
+    default: return null;
+  }
+}
+
 function revokeDisallowedCommandApprovals(settings: AiSettings): void {
   for (const [tabId, session] of Object.entries(_sessionByTab)) {
     for (const item of _chatByTab[tabId] ?? []) {
-      if (
-        item.kind === "command"
-        && !item.result
-        && !item.rejected
-        && !isAutoApprovalAllowed(settings, item.cmd.kind)
-      ) {
+      // Only tool cards (run_command + the proposal cards) carry pending
+      // approvals worth revoking; skip plain bubbles and settled cards.
+      if (item.kind !== "command" && !("proposal" in item)) continue;
+      if (item.result || item.rejected) continue;
+      const kind = cardAutoApprovalKind(item);
+      const id = cardId(item);
+      if (kind && id && !isAutoApprovalAllowed(settings, kind)) {
         commandApprovals.revokeEligibility(
           { tabId, instanceId: session.instance_id },
-          item.cmd.id,
+          id,
         );
       }
     }
@@ -1883,6 +1981,58 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
     pushChat(tab, { kind: "command", cmd: proposed, at: Date.now() });
   });
 
+  await addListener<WebToolProposal>(`ai:web_tool_proposed:${tab}`, (e) => {
+    const proposal = stripContextEpoch(e.payload);
+    commandApprovals.snapshotEligibility(
+      { tabId: tab, instanceId: info.instance_id },
+      proposal.id,
+      isAutoApprovalAllowed(_settings, proposal.kind),
+    );
+    pushChat(tab, { kind: "web_tool", proposal, at: Date.now() });
+  });
+
+  await addListener<DownloadProposal>(`ai:download_proposed:${tab}`, (e) => {
+    const proposal = stripContextEpoch(e.payload);
+    commandApprovals.snapshotEligibility(
+      { tabId: tab, instanceId: info.instance_id },
+      proposal.id,
+      isAutoApprovalAllowed(_settings, "download_file"),
+    );
+    pushChat(tab, { kind: "download", proposal, at: Date.now() });
+  });
+
+  await addListener<AnalyzeProposal>(`ai:analyze_proposed:${tab}`, (e) => {
+    const proposal = stripContextEpoch(e.payload);
+    commandApprovals.snapshotEligibility(
+      { tabId: tab, instanceId: info.instance_id },
+      proposal.id,
+      isAutoApprovalAllowed(_settings, "analyze_locally"),
+    );
+    pushChat(tab, { kind: "analyze", proposal, at: Date.now() });
+  });
+
+  await addListener<PatchProposal>(`ai:patch_proposed:${tab}`, (e) => {
+    const proposal = stripContextEpoch(e.payload);
+    // Per-step auto-approval: patch_cp / patch_modify / patch_diff / patch_mv
+    // each map to their own settings.auto_patch_<step> toggle.
+    commandApprovals.snapshotEligibility(
+      { tabId: tab, instanceId: info.instance_id },
+      proposal.id,
+      isAutoApprovalAllowed(_settings, `patch_${proposal.step}`),
+    );
+    pushChat(tab, { kind: "patch", proposal, at: Date.now() });
+  });
+
+  await addListener<MatchProposal>(`ai:match_proposed:${tab}`, (e) => {
+    const proposal = stripContextEpoch(e.payload);
+    commandApprovals.snapshotEligibility(
+      { tabId: tab, instanceId: info.instance_id },
+      proposal.id,
+      isAutoApprovalAllowed(_settings, "match_file"),
+    );
+    pushChat(tab, { kind: "match", proposal, at: Date.now() });
+  });
+
   // internal_command：当前只用于 file_ops 工具的远端能力探测（一行只读 echo "py3=... perl=... diff=..."）。
   // 不弹审批、不入 chat 时间线，直接粘到 PTY 跑——用户在终端历史里看到探测命令滚过，
   // 透明但不打断流程。后续若加其他 read-only 内部命令也走这条路径。
@@ -1924,18 +2074,14 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
       }
       return;
     }
-    const proposed: CommandProposed = {
-      id: e.payload.id,
-      tool_call_id: e.payload.id,
-      cmd: e.payload.cmd,
-      full_cmd: e.payload.full_cmd,
-      sentinel: e.payload.sentinel,
-      explain: "",
-      side_effect: "",
-      timeout_s: 60,
-    };
     try {
-      await executeCommand(session, proposed, kind, currentInfo.target_id);
+      await executeCommand(
+        session,
+        e.payload.id,
+        { full_cmd: e.payload.full_cmd, sentinel: e.payload.sentinel, timeout_s: 60 },
+        kind,
+        currentInfo.target_id,
+      );
       // Internal probes have no command card and therefore no matching
       // command_completed event to own registry cleanup. ai_command_result is a
       // processing ack, so success is the exact point at which replay is no
@@ -2011,15 +2157,120 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
     }
   });
 
+  await addListener<WebToolResult>(`ai:web_tool_completed:${tab}`, (e) => {
+    const result = stripContextEpoch(e.payload);
+    const arr = _chatByTab[tab] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "web_tool" && item.proposal.id === result.id) {
+        commandApprovals.clear(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        const replaced: ChatItem = { ...item, result };
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
+        break;
+      }
+    }
+  });
+
+  await addListener<DownloadResult>(`ai:download_completed:${tab}`, (e) => {
+    const result = stripContextEpoch(e.payload);
+    const arr = _chatByTab[tab] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "download" && item.proposal.id === result.id) {
+        commandApprovals.clear(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        const replaced: ChatItem = { ...item, result };
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
+        break;
+      }
+    }
+  });
+
+  await addListener<AnalyzeResult>(`ai:analyze_completed:${tab}`, (e) => {
+    const result = stripContextEpoch(e.payload);
+    const arr = _chatByTab[tab] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "analyze" && item.proposal.id === result.id) {
+        commandApprovals.clear(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        const replaced: ChatItem = { ...item, result };
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
+        break;
+      }
+    }
+  });
+
+  // patch_completed carries the same PTY result shape as command_completed;
+  // patch cards reuse executeCommand (hence clearCommandExecution), so the
+  // registry cleanup mirrors the command path.
+  await addListener<CommandResult>(`ai:patch_completed:${tab}`, (e) => {
+    const result = stripContextEpoch(e.payload);
+    const arr = _chatByTab[tab] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "patch" && item.proposal.id === result.id) {
+        clearCommandExecution(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        commandApprovals.clear(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        const replaced: ChatItem = { ...item, result };
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
+        break;
+      }
+    }
+  });
+
+  // match_completed: same PTY result shape; match cards reuse executeCommand.
+  await addListener<CommandResult>(`ai:match_completed:${tab}`, (e) => {
+    const result = stripContextEpoch(e.payload);
+    const arr = _chatByTab[tab] ?? [];
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const item = arr[i];
+      if (item.kind === "match" && item.proposal.id === result.id) {
+        clearCommandExecution(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        commandApprovals.clear(
+          { tabId: tab, instanceId: info.instance_id },
+          result.id,
+        );
+        const replaced: ChatItem = { ...item, result };
+        _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        schedulePersist(tab);
+        break;
+      }
+    }
+  });
+
   // 拒绝路径单独事件 —— complete 跟 reject 是两种语义，复用 command_completed
   // 加 rejected:true 字段会让 listener 分支模糊。后端 RejectCommand 分支 emit
-  // 这个，前端清 pending + 标记 ChatItem.rejected。
+  // 这个，前端清 pending + 标记 ChatItem.rejected。所有按 id 匹配的卡片
+  // （command / web_tool / download / analyze / patch / match）共用这条 reject 路径。
   await addListener<{ id: string; reason: string }>(`ai:command_rejected:${tab}`, (e) => {
     _pendingByTab[tab] = null;
     const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
-      if (item.kind === "command" && item.cmd.id === e.payload.id) {
+      if (item.kind !== "command" && item.kind !== "web_tool" && item.kind !== "download" && item.kind !== "analyze" && item.kind !== "patch" && item.kind !== "match") continue;
+      const itemId = item.kind === "command" ? item.cmd.id : item.proposal.id;
+      if (itemId === e.payload.id) {
         clearCommandExecution(
           { tabId: tab, instanceId: info.instance_id },
           e.payload.id,

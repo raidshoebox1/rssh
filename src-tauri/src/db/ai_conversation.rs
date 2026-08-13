@@ -1,10 +1,11 @@
-//! AI conversation persistence (schema v17). Two blobs per row — see the
+//! AI conversation persistence (schema v27). Three blobs per row — see the
 //! migration comment in schema.rs for the data-fork rationale.
 //!
-//! Writers are split by ownership: the session actor owns history_json
-//! (`save_history`, called at every consistent commit point), the front-end
-//! owns timeline_json (`set_timeline`, called after chat-mutating events).
-//! They never touch each other's column, so no lost-update hazard.
+//! Writers are split by ownership: the session actor owns history_json AND
+//! audit_json (`save_history_and_audit`, called at every consistent commit
+//! point), the front-end owns timeline_json (`set_timeline`, called after
+//! chat-mutating events). They never touch each other's column, so no
+//! lost-update hazard.
 
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -31,6 +32,7 @@ pub struct ConversationRow {
     pub title: String,
     pub history_json: String,
     pub timeline_json: String,
+    pub audit_json: String,
 }
 
 /// Most recently active first — the picker shows "continue where I left off".
@@ -57,7 +59,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Option<ConversationRow>> {
     let conn = db.lock()?;
     let row = conn
         .query_row(
-            "SELECT id, target_key, title, history_json, timeline_json
+            "SELECT id, target_key, title, history_json, timeline_json, audit_json
              FROM ai_conversations WHERE id = ?1",
             [id],
             |r| {
@@ -67,6 +69,7 @@ pub fn get(db: &Db, id: &str) -> AppResult<Option<ConversationRow>> {
                     title: r.get(2)?,
                     history_json: r.get(3)?,
                     timeline_json: r.get(4)?,
+                    audit_json: r.get(5)?,
                 })
             },
         )
@@ -104,6 +107,29 @@ pub fn save_history(db: &Db, id: &str, title: &str, history_json: &str) -> AppRe
         "UPDATE ai_conversations
          SET title = ?2, history_json = ?3, updated_at = ?4 WHERE id = ?1",
         params![id, title, history_json, now],
+    )?;
+    Ok(())
+}
+
+/// Autosave history_json AND audit_json in one UPDATE. Both are actor-owned
+/// and share the same commit points (every consistent history save), so
+/// batching them avoids a second write and removes the risk of one column
+/// racing ahead of the other across a resume. UPDATE-only + a miss is silently
+/// dropped — same anti-resurrection invariant as `save_history`.
+pub fn save_history_and_audit(
+    db: &Db,
+    id: &str,
+    title: &str,
+    history_json: &str,
+    audit_json: &str,
+) -> AppResult<()> {
+    let conn = db.lock()?;
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "UPDATE ai_conversations
+         SET title = ?2, history_json = ?3, audit_json = ?4, updated_at = ?5
+         WHERE id = ?1",
+        params![id, title, history_json, audit_json, now],
     )?;
     Ok(())
 }
@@ -153,6 +179,7 @@ mod tests {
         assert_eq!(row.title, "disk full");
         assert_eq!(row.history_json, r#"[{"role":"user"}]"#);
         assert_eq!(row.timeline_json, "[]"); // column default until front-end writes
+        assert_eq!(row.audit_json, "[]"); // column default until actor persists audit
     }
 
     #[test]
@@ -161,6 +188,24 @@ mod tests {
         // user deleted the conversation must NOT recreate the row.
         let db = Db::open_in_memory().unwrap();
         save_history(&db, "ghost", "t", "[]").unwrap();
+        assert!(get(&db, "ghost").unwrap().is_none());
+    }
+
+    #[test]
+    fn save_history_and_audit_writes_both_columns() {
+        let db = Db::open_in_memory().unwrap();
+        create(&db, "c1", "local").unwrap();
+        save_history_and_audit(&db, "c1", "t", "[1]", r#"[{"type":"note"}]"#).unwrap();
+        let row = get(&db, "c1").unwrap().unwrap();
+        assert_eq!(row.history_json, "[1]");
+        assert_eq!(row.audit_json, r#"[{"type":"note"}]"#);
+    }
+
+    #[test]
+    fn save_history_and_audit_without_create_is_noop() {
+        // Same anti-resurrection invariant as save_history.
+        let db = Db::open_in_memory().unwrap();
+        save_history_and_audit(&db, "ghost", "t", "[]", "[]").unwrap();
         assert!(get(&db, "ghost").unwrap().is_none());
     }
 

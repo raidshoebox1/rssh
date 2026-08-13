@@ -51,20 +51,115 @@ export interface AiSettings {
   auto_patch_modify: boolean;
   auto_patch_diff: boolean;
   auto_patch_mv: boolean;
+  auto_web_search: boolean;
+  auto_web_fetch: boolean;
   /** 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开时发探针。默认 off。 */
   auto_detect_remote_shell: boolean;
 }
 
-/** AI 工具卡片 kind —— 后端 emit command_proposed 时打的 tag；前端按它查 auto_* 设置。 */
-export type CommandKind =
-  | "run_command"
-  | "match_file"
-  | "download_file"
-  | "analyze_locally"
-  | "patch_cp"
-  | "patch_modify"
-  | "patch_diff"
-  | "patch_mv";
+/** AI 工具卡片 kind —— 后端 emit command_proposed 时打的 tag；前端按它查 auto_* 设置。
+ *  patch×4 / match_file 已迁到独立 ChatItem（见 PatchStep / MatchProposal），不在此列；
+ *  CommandProposed 现在只服务 run_command。 */
+export type CommandKind = "run_command";
+
+/** web_search / web_fetch — dedicated proposal/result stream, independent of
+ *  the command card (no full_cmd/sentinel/explain/side_effect). */
+export type WebToolKind = "web_search" | "web_fetch";
+
+export interface WebToolProposal {
+  id: string;
+  kind: WebToolKind;
+  /** Redacted query (web_search) or URL (web_fetch). */
+  target: string;
+}
+
+export interface WebToolResult {
+  id: string;
+  ok: boolean;
+  summary: string;
+  duration_ms: number;
+}
+
+/** download_file — SFTP pull of a remote artifact to local. Independent
+ *  proposal/result stream; ack-only (approve just acks, the backend does the
+ *  SFTP transfer itself — no PTY execution). */
+export interface DownloadProposal {
+  id: string;
+  remote_path: string;
+  max_mb: number;
+  dest_dir: string;
+}
+
+export interface DownloadResult {
+  id: string;
+  ok: boolean;
+  local_path?: string;
+  bytes?: number;
+  summary: string;
+  duration_ms: number;
+}
+
+/** analyze_locally — spawn a new window with an independent AI session to
+ *  analyze a local artifact. Independent proposal/result stream; ack-only
+ *  (approve just acks, the backend spawns the window itself, no PTY). */
+export interface AnalyzeProposal {
+  id: string;
+  local_path: string;
+  task: string;
+}
+
+export interface AnalyzeResult {
+  id: string;
+  ok: boolean;
+  summary: string;
+  duration_ms: number;
+}
+
+/** patch_file — 4-step staged edit (cp → modify → diff → mv), each step a PTY
+ *  execution sharing the PtyExecution envelope. Independent proposal/result
+ *  stream (patch_proposed / patch_completed); reuses executeCommand + the
+ *  shared reject (command_rejected) / ack (ai_command_result) channels.
+ *
+ *  `step` discriminates which fields are meaningful; optionals are absent on
+ *  the steps that don't use them. The result is a PTY CommandResult (exit code
+ *  + output), same shape as run_command. */
+export type PatchStep = "cp" | "modify" | "diff" | "mv";
+
+export interface PatchProposal {
+  id: string;
+  step: PatchStep;
+  /** Shell command to run (shown for trust). */
+  cmd: string;
+  /** Target file being patched. */
+  path: string;
+  /** Staging tmp path (cp / modify / diff / mv). */
+  tmp_path?: string;
+  /** modify only. */
+  find?: string;
+  replace?: string;
+  expected_count?: number;
+  /** mv only: the unified diff to show on the apply card. */
+  diff?: string;
+  execution: PtyExecution;
+}
+
+/** match_file — read-only search of `find` in a remote file. Independent
+ *  proposal/result stream (match_proposed / match_completed); reuses
+ *  executeCommand + the shared reject/ack channels. Result is the PTY
+ *  CommandResult (the raw search output). */
+export interface MatchProposal {
+  id: string;
+  /** Shell command to run (shown for trust). */
+  cmd: string;
+  /** File to search. */
+  path: string;
+  /** Search string. */
+  find: string;
+  /** Context chars before/after each match (clamped by the backend). */
+  before: number;
+  after: number;
+  execution: PtyExecution;
+}
 
 export interface ModelInfo {
   id: string;
@@ -126,8 +221,26 @@ export type ChatItem =
   | { kind: "user"; client_id?: string; client_seq?: number; text: string; at: number }
   | { kind: "assistant"; id: string; text: string; at: number; streaming: boolean; cancelled?: boolean }
   | { kind: "command"; cmd: CommandProposed; at: number; result?: CommandResult; rejected?: { reason: string } }
+  | { kind: "web_tool"; proposal: WebToolProposal; at: number; result?: WebToolResult; rejected?: { reason: string } }
+  | { kind: "download"; proposal: DownloadProposal; at: number; result?: DownloadResult; rejected?: { reason: string } }
+  | { kind: "analyze"; proposal: AnalyzeProposal; at: number; result?: AnalyzeResult; rejected?: { reason: string } }
+  | { kind: "patch"; proposal: PatchProposal; at: number; result?: CommandResult; rejected?: { reason: string } }
+  | { kind: "match"; proposal: MatchProposal; at: number; result?: CommandResult; rejected?: { reason: string } }
   | { kind: "error"; text: string; at: number }
   | { kind: "note"; text: string; at: number };
+
+/** PTY execution envelope — the "how to run it" half of a proposal, shared by
+ *  every tool whose approval pastes a command into the terminal (run_command /
+ *  match_file / patch×4). Split out from each tool's domain fields so
+ *  `executeCommand` takes just (cardId, execution) and is reused across proposal
+ *  types instead of depending on any one of them. */
+export interface PtyExecution {
+  /** 实际要粘贴到终端的命令（含 sentinel + exit code 回显），由后端拼装。 */
+  full_cmd: string;
+  /** 用于在 PTY 输出流里识别命令完成的随机字符串。 */
+  sentinel: string;
+  timeout_s: number;
+}
 
 export interface CommandProposed {
   id: string;
@@ -135,24 +248,14 @@ export interface CommandProposed {
    * provider's tool-call id remains backend-internal. */
   tool_call_id: string;
   cmd: string;
-  /** 实际要粘贴到终端的命令（含 sentinel + exit code 回显），由后端拼装。 */
-  full_cmd: string;
-  /** 用于在 PTY 输出流里识别命令完成的随机字符串。 */
-  sentinel: string;
   explain: string;
   side_effect: string;
-  timeout_s: number;
+  execution: PtyExecution;
   /**
    * 工具卡片类型 —— 前端按 kind 查 settings.auto_<kind> 决定是否自动批准。
    * 历史回放（旧 audit log 重渲染）可能没有 kind，按未知处理走人审。
    */
   kind?: CommandKind;
-  /**
-   * patch_file 第 4 张 mv 卡片携带的 diff 文本（来自第 3 张 diff 命令的输出）——
-   * 让用户审批 mv 时直接在卡片上看到 diff，不用回滚翻第 3 张的 result 区域。
-   * 其他卡片不带（undefined）。
-   */
-  diff?: string;
 }
 
 export interface CommandResult {
@@ -178,8 +281,9 @@ export interface AuditEntry {
 export type AuditKind =
   | { type: "session_started"; skill: string; target: string }
   | { type: "session_ended" }
-  | { type: "llm_request"; model: string; redacted_payload: string }
-  | { type: "llm_response"; text: string; tokens_in: number | null; tokens_out: number | null }
+  | { type: "user_message"; content: string }
+  | { type: "llm_request"; model: string }
+  | { type: "llm_response"; tokens_in: number | null; tokens_out: number | null }
   | { type: "command_proposed"; id: string; cmd: string; explain: string; side_effect: string }
   | { type: "command_rejected"; id: string; reason: string }
   | { type: "command_blocked"; cmd: string; reason: string }
@@ -188,6 +292,8 @@ export type AuditKind =
   | { type: "download_completed"; id: string; local_path: string; bytes: number }
   | { type: "analyze_proposed"; id: string; local_path: string; task: string }
   | { type: "skill_loaded"; id: string; name: string }
+  | { type: "web_search_completed"; query: string; provider: string; response_bytes: number; duration_ms: number }
+  | { type: "web_fetch_completed"; requested_url: string; final_url: string; source_bytes: number; truncated: boolean }
   | { type: "context_rolled_back"; user_message_index: number; dropped_messages: number }
   | { type: "note"; message: string }
   | { type: "error"; message: string };

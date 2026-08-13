@@ -2,6 +2,11 @@
     import * as ai from "./store.svelte.ts";
     import type { AiTargetKind, ChatItem, ConversationMeta } from "./types.ts";
     import CommandConfirmDialog from "./CommandConfirmDialog.svelte";
+    import WebToolConfirmCard from "./WebToolConfirmCard.svelte";
+    import DownloadConfirmCard from "./DownloadConfirmCard.svelte";
+    import AnalyzeConfirmCard from "./AnalyzeConfirmCard.svelte";
+    import PatchConfirmCard from "./PatchConfirmCard.svelte";
+    import MatchConfirmCard from "./MatchConfirmCard.svelte";
     import AuditPanel from "./AuditPanel.svelte";
     import Modal from "../components/Modal.svelte";
     import DangerModeToggle from "./DangerModeToggle.svelte";
@@ -475,6 +480,65 @@
                                 <span class="cancelled-tag">{t("ai.bubble.cancelled")}</span>
                             {/if}
                         </div>
+                    {:else if item.kind === "web_tool" && session}
+                        {#key item.proposal.id}
+                            <WebToolConfirmCard
+                                {tabId}
+                                instanceId={session.instance_id}
+                                proposal={item.proposal}
+                                result={item.result}
+                                rejected={item.rejected}
+                                {active}
+                            />
+                        {/key}
+                    {:else if item.kind === "download" && session}
+                        {#key item.proposal.id}
+                            <DownloadConfirmCard
+                                {tabId}
+                                instanceId={session.instance_id}
+                                proposal={item.proposal}
+                                result={item.result}
+                                rejected={item.rejected}
+                                {active}
+                            />
+                        {/key}
+                    {:else if item.kind === "analyze" && session}
+                        {#key item.proposal.id}
+                            <AnalyzeConfirmCard
+                                {tabId}
+                                instanceId={session.instance_id}
+                                proposal={item.proposal}
+                                result={item.result}
+                                rejected={item.rejected}
+                                {active}
+                            />
+                        {/key}
+                    {:else if item.kind === "match" && session}
+                        {#key item.proposal.id}
+                            <MatchConfirmCard
+                                {tabId}
+                                instanceId={session.instance_id}
+                                targetKind={targetKind}
+                                targetSessionId={targetId}
+                                proposal={item.proposal}
+                                result={item.result}
+                                rejected={item.rejected}
+                                {active}
+                            />
+                        {/key}
+                    {:else if item.kind === "patch" && session}
+                        {#key item.proposal.id}
+                            <PatchConfirmCard
+                                {tabId}
+                                instanceId={session.instance_id}
+                                targetKind={targetKind}
+                                targetSessionId={targetId}
+                                proposal={item.proposal}
+                                result={item.result}
+                                rejected={item.rejected}
+                                {active}
+                            />
+                        {/key}
                     {:else if item.kind === "command" && session}
                         {#key item.cmd.id}
                             <CommandConfirmDialog

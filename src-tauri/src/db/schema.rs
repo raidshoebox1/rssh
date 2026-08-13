@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-const SCHEMA_VERSION: u32 = 26;
+const SCHEMA_VERSION: u32 = 27;
 
 fn column_exists(conn: &Connection, table: &str, col: &str) -> AppResult<bool> {
     let mut stmt = conn.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?;
@@ -117,7 +117,7 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
     }
 
     if version < 12 {
-        // AI 自定义 skill 表（内置 5 个 skill 不入表，从 prompts.rs 直接读）
+        // AI 自定义 Skill 表（内置 Skill 不入表，从 prompts.rs 直接读）
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS ai_skills (
@@ -577,6 +577,25 @@ pub fn migrate(conn: &Connection) -> AppResult<()> {
                  ('command_block_prompt_redact_enabled', 'true'),
                  ('command_block_prompt_replacement', 'anonymous@rssh');",
         )?;
+    }
+
+    if version < 27 {
+        // Audit log persistence. AuditLog was in-memory only (decision #4:
+        // "save on user action"), so a resumed session's audit panel came back
+        // empty and token totals — derived from its LlmResponse entries — reset
+        // to 0. The new column holds the serialized AuditLog so both survive an
+        // actor restart. Default '[]': conversations created before this
+        // migration resume with an empty audit, which is non-fatal.
+        // table_exists guard: migration tests stamp an older schema at a
+        // version past ai_conversations' v17 creation without ever creating
+        // the table. A real DB always has it by v17, so this only affects tests.
+        if table_exists(conn, "ai_conversations")?
+            && !column_exists(conn, "ai_conversations", "audit_json")?
+        {
+            conn.execute_batch(
+                "ALTER TABLE ai_conversations ADD COLUMN audit_json TEXT NOT NULL DEFAULT '[]';",
+            )?;
+        }
     }
 
     if version < SCHEMA_VERSION {
