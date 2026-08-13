@@ -306,24 +306,18 @@ jobs:
           echo "v=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
-      - name: Setup signing
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/release.jks
-          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
-            "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            "${{ secrets.ANDROID_KEY_ALIAS }}" \
-            "${{ secrets.ANDROID_KEY_PASSWORD }}" \
-            > src-tauri/gen/android/key.properties
-
+      # Debug APK: auto-signed with the Android SDK's debug.keystore, so no
+      # keystore secrets are required. Suitable for test/dev distribution only
+      # (isDebuggable + cleartext enabled) — not for Play Store release.
       # Two invocations: plain --apk builds the universal APK (all 4 ABIs,
       # incl. x86 emulators); --split-per-abi replaces that output with one
       # APK per requested target, so it must be a second run. The arm64 leg
       # reuses the cargo cache from the universal build — only repackaging.
       - name: Build Android APK (universal)
-        run: npx tauri android build --apk
+        run: npx tauri android build --apk --debug
 
       - name: Build Android APK (arm64 split)
-        run: npx tauri android build --apk --split-per-abi --target aarch64
+        run: npx tauri android build --apk --split-per-abi --target aarch64 --debug
 
       - name: Rename APKs
         shell: bash
