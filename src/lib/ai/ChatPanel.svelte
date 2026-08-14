@@ -90,10 +90,22 @@
     $effect(() => {
         const p = ai.pendingPrefill(tabId);
         if (!p) return;
-        inputText = p.text;
+        // 在光标位置插入(替换选区,保留两侧草稿),与 pasteIntoInput 语义一致,
+        // 避免把用户已输入的草稿整个覆盖掉。面板刚 openPanel 挂载、inputEl
+        // 尚为 null 时 fallback 到末尾追加(此时草稿为空,等效于原覆盖行为)。
+        const el = inputEl;
+        const start = el?.selectionStart ?? inputText.length;
+        const end = el?.selectionEnd ?? inputText.length;
+        inputText = inputText.slice(0, start) + p.text + inputText.slice(end);
         auditOpen = false;
         ai.clearPrefill(tabId);
-        if (active) inputEl?.focus();
+        if (active) el?.focus();
+        if (el) {
+            const pos = start + p.text.length;
+            requestAnimationFrame(() => {
+                try { el.setSelectionRange(pos, pos); } catch { /* no-op */ }
+            });
+        }
     });
 
     // 固定挂载的隐藏面板不能保留全局 modal：否则 A 隐藏后仍会拦截 B 的 Esc。
