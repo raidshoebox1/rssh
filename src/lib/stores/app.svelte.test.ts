@@ -146,6 +146,17 @@ describe("tab MRU ordering", () => {
     expect(app.activeTabId()).toBe("home");
   });
 
+  it("derives the fixed Home tab label from the active locale", async () => {
+    const app = await loadAppModule();
+    const { setLocale } = await import("../i18n/index.svelte.ts");
+    const home = app.tabs()[0];
+
+    expect(app.tabLabel(home)).toBe("Home");
+    setLocale("zh");
+
+    expect(app.tabLabel(home)).toBe("首页");
+  });
+
   it("inserts each new tab at the front of the session region (after home)", async () => {
     const app = await loadAppModule();
     await app.setTabMru(true);
@@ -473,7 +484,6 @@ describe("connectTelnetProfile", () => {
     expect(app.tabs()[1].meta?.echo_mode).toBe("on");
   });
 });
-
 describe("command block split mode", () => {
   it("shares one in-flight load across terminals", async () => {
     let resolveSetting!: (value: unknown) => void;
