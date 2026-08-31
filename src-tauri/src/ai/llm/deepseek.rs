@@ -307,11 +307,18 @@ async fn chat(
                         sink(ChatDelta::Text(content.to_string()));
                     }
                 }
-                // 思考链累积：不往 sink 推（不渲染 UI），但必须还回去
-                if let Some(rc) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
-                    if !rc.is_empty() {
-                        reasoning_out.push_str(rc);
-                    }
+                // 思考链：DeepSeek 官方 SDK 用 reasoning_content，部分 vllm/
+                // 网关（如本项目实测的 deepseek-v4-flash-0731-max）用 reasoning。
+                // 两字段都识别：命中任一即累积（还回 history 防下轮 400）并走
+                // sink 推给 UI 折叠展示。
+                let rc = delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+                if !rc.is_empty() {
+                    reasoning_out.push_str(rc);
+                    sink(ChatDelta::Reasoning(rc.to_string()));
                 }
                 if let Some(tcs_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                     for tc in tcs_arr {
