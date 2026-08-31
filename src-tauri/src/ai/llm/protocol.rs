@@ -182,6 +182,24 @@ fn build_messages(system: &str, history: &[ChatMessage]) -> Vec<OaiMsg> {
     messages
 }
 
+/// Streaming reasoning deltas for display: the DeepSeek SDK streams the
+/// chain of thought under `reasoning_content`, vllm-style gateways under
+/// `reasoning` — prefer the SDK field, fall back to the gateway field,
+/// empty when neither. Extracted from `chat()` so the field preference is
+/// directly testable.
+///
+/// Display-only: the wire/history contracts above are untouched —
+/// `build_messages` still drops `reasoning_content` from the request
+/// (locked by `assistant_reasoning_content_is_never_serialized`) and
+/// `ChatResponse.reasoning_content` stays `None`.
+fn delta_reasoning(delta: &serde_json::Value) -> &str {
+    delta
+        .get("reasoning_content")
+        .or_else(|| delta.get("reasoning"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+}
+
 // ─── 主入口：流式 chat ─────────────────────────────────────────────
 
 pub async fn chat(
@@ -270,6 +288,14 @@ pub async fn chat(
                         text_out.push_str(content);
                         sink(ChatDelta::Text(content.to_string()));
                     }
+                }
+                // 思考链增量：display-only，只走 sink 给前端折叠展示——绝不
+                // 进终端、绝不进历史（build_messages 仍丢弃 reasoning_content，
+                // ChatResponse.reasoning_content 仍为 None）。不累积：本协议
+                // 的回传契约就是丢，累积 resp.reasoning_content 会是死代码。
+                let rc = delta_reasoning(delta);
+                if !rc.is_empty() {
+                    sink(ChatDelta::Reasoning(rc.to_string()));
                 }
                 if let Some(tcs_arr) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                     for tc in tcs_arr {
@@ -390,6 +416,20 @@ mod tests {
         let s = serde_json::to_string(&build_messages("sys", &history)).unwrap();
         assert!(!s.contains("reasoning_content"));
         assert!(!s.contains("secret chain"));
+    }
+
+    /// The display path reads streaming reasoning from either field:
+    /// `reasoning_content` (DeepSeek SDK) preferred, `reasoning` (vllm
+    /// gateway) as fallback, empty when neither. Display-only — the
+    /// wire/history contracts above stay locked by the leak test.
+    #[test]
+    fn delta_reasoning_prefers_sdk_field_and_falls_back() {
+        let sdk = serde_json::json!({ "reasoning_content": "sdk chain" });
+        assert_eq!(delta_reasoning(&sdk), "sdk chain");
+        let vllm = serde_json::json!({ "reasoning": "vllm chain" });
+        assert_eq!(delta_reasoning(&vllm), "vllm chain");
+        let neither = serde_json::json!({ "content": "text only" });
+        assert_eq!(delta_reasoning(&neither), "");
     }
 
     #[test]
