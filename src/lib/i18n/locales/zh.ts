@@ -281,6 +281,8 @@ const zh: Messages = {
   "plugins.host_unavailable": "当前宿主不支持插件面板（无 asset 协议）",
   "plugins.warn.trust": "安全提示：插件可在后台执行命令（本机 Shell 与 SSH 会话），请仅安装可信来源的第三方插件",
   "plugins.drag_hint": "拖拽调整顺序",
+  "plugins.panel.show": "显示插件面板",
+  "plugins.panel.hide": "隐藏插件面板",
   "plugins.position.left": "左侧",
   "plugins.position.right": "右侧",
   "plugins.position.top": "顶部",
@@ -836,6 +838,7 @@ const zh: Messages = {
   "shortcut.tab.exit_cycle": "退出 Tab 切换模式",
   "shortcut.tab.goto": "切换到第 1–9 个 Tab",
   "shortcut.ai.toggle": "切换 AI 面板",
+  "shortcut.panel.plugins": "显示/隐藏插件面板",
   "shortcut.term.copy": "复制选区",
   "shortcut.term.paste": "粘贴",
 

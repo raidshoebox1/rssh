@@ -29,6 +29,7 @@ export type ActionId =
   | "tab.clone"
   | "tab.openNewWindow"
   | "ai.toggle"
+  | "panel.plugins"
   | "term.search"
   | "term.sftp"
   | "term.snippet"
@@ -57,6 +58,7 @@ export const ACTIONS: readonly ActionMeta[] = [
   { id: "tab.clone",         labelKey: "shortcut.tab.clone",           surface: "global",   mac: primary("d", true, { shift: true }),        other: primary("d", false, { shift: true }) },
   { id: "tab.openNewWindow", labelKey: "shortcut.tab.open_new_window", surface: "global",   mac: primary("n", true, { shift: true }),        other: primary("n", false, { shift: true }) },
   { id: "ai.toggle",         labelKey: "shortcut.ai.toggle",           surface: "global",   mac: primary("a", true, { shift: true }),        other: primary("a", false, { shift: true }) },
+  { id: "panel.plugins",     labelKey: "shortcut.panel.plugins",       surface: "global",   mac: primary("p", true, { shift: true }),        other: primary("p", false, { shift: true }) },
   { id: "term.search",       labelKey: "shortcuts.search",             surface: "terminal", mac: primary("f", true),                         other: primary("f", false) },
   { id: "term.sftp",         labelKey: "shortcuts.open_sftp",          surface: "terminal", mac: primary("o", true),                         other: primary("o", false) },
   { id: "term.snippet",      labelKey: "shortcuts.snippet",            surface: "terminal", mac: primary("s", true),                         other: primary("s", false) },

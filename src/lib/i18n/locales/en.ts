@@ -279,6 +279,8 @@ const en = {
   "plugins.host_unavailable": "Plugin panels are unavailable in this host (no asset protocol)",
   "plugins.warn.trust": "Security note: plugins can run commands in the background (local shell and SSH sessions) — only install third-party plugins from sources you trust",
   "plugins.drag_hint": "Drag to reorder",
+  "plugins.panel.show": "Show plugin panel",
+  "plugins.panel.hide": "Hide plugin panel",
   "plugins.position.left": "Left",
   "plugins.position.right": "Right",
   "plugins.position.top": "Top",
@@ -833,6 +835,7 @@ const en = {
   "shortcut.tab.exit_cycle": "Exit Tab cycling mode",
   "shortcut.tab.goto": "Switch to Tab 1–9",
   "shortcut.ai.toggle": "Toggle AI panel",
+  "shortcut.panel.plugins": "Toggle plugin panel",
   "shortcut.term.copy": "Copy selection",
   "shortcut.term.paste": "Paste",
 

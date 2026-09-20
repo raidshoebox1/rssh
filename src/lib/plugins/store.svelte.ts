@@ -171,6 +171,23 @@ export function openForNewTab(tabId: string): void {
   if (_stripAuto) _stripOpenByTab[tabId] = true;
 }
 
+/**
+ * Manual toggle for the plugin regions (tab context menu, keyboard shortcut,
+ * the panel's own close button): either area being open closes BOTH — one
+ * action must be enough to get the terminal space back — otherwise every area
+ * that actually has plugins to show opens. Availability is passed in because
+ * only the shell knows which areas currently hold enabled plugins.
+ */
+export function togglePanels(tabId: string, has: { side: boolean; strip: boolean }): void {
+  if (isSideOpen(tabId) || isStripOpen(tabId)) {
+    closeSide(tabId);
+    closeStrip(tabId);
+    return;
+  }
+  if (has.side) openSide(tabId);
+  if (has.strip) openStrip(tabId);
+}
+
 /** Split view takes over the terminal region: every plugin panel closes.
  *  Width preferences survive (their tabs are still alive). */
 export function closeAllPanels(): void {

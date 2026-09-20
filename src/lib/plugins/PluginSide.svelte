@@ -21,6 +21,7 @@
         activeTabId,
         onResizeStart,
         onResetWidth,
+        onClose,
     }: {
         side: HorizontalSide;
         width: number;
@@ -31,6 +32,9 @@
         activeTabId: string;
         onResizeStart: (e: MouseEvent) => void;
         onResetWidth: () => void;
+        /** Close the whole region (the header's × — the visible counterpart of
+         *  Esc, so the column is discoverably dismissible). */
+        onClose: () => void;
     } = $props();
 
     // Card collapse is per plugin (global, not per tab): collapsing a chart
@@ -67,41 +71,93 @@
 >
     {#snippet pane(p)}
         {@const tab = tabs.find((entry) => entry.tabId === p.id)}
-        <div class="plugin-cards">
-            {#if tab}
-                {#each plugins as plugin (plugin.id)}
-                    {@const src = entryUrl(plugin)}
-                    <section class="plugin-card">
-                        <header class="plugin-card-header">
-                            <button
-                                class="collapse-btn"
-                                aria-expanded={!collapsed[plugin.id]}
-                                onclick={() => toggleCollapse(plugin.id)}
-                            >
-                                <span class="chevron" class:open={!collapsed[plugin.id]}>&#8250;</span>
-                                <span class="name">{plugin.name}</span>
-                            </button>
-                            <span class="version">{plugin.version}</span>
-                        </header>
-                        {#if !collapsed[plugin.id] && src}
-                            <div class="plugin-card-body" style:height="{heights[plugin.id] ?? FALLBACK_PLUGIN_SIZE}px">
-                                <PluginFrame
-                                    {plugin}
-                                    {src}
-                                    sessionId={tab.sessionId}
-                                    visible={p.visible}
-                                    onSize={(size) => onPluginSize(plugin.id, size)}
-                                />
-                            </div>
-                        {/if}
-                    </section>
-                {/each}
-            {/if}
+        <div class="plugin-region">
+            <div class="plugin-region-head">
+                <span class="plugin-region-label">{t("plugins.side_region")}</span>
+                <button
+                    class="plugin-region-close"
+                    onclick={onClose}
+                    aria-label={t("common.close")}
+                    title={t("common.close")}
+                >&times;</button>
+            </div>
+            <div class="plugin-cards">
+                {#if tab}
+                    {#each plugins as plugin (plugin.id)}
+                        {@const src = entryUrl(plugin)}
+                        <section class="plugin-card">
+                            <header class="plugin-card-header">
+                                <button
+                                    class="collapse-btn"
+                                    aria-expanded={!collapsed[plugin.id]}
+                                    onclick={() => toggleCollapse(plugin.id)}
+                                >
+                                    <span class="chevron" class:open={!collapsed[plugin.id]}>&#8250;</span>
+                                    <span class="name">{plugin.name}</span>
+                                </button>
+                                <span class="version">{plugin.version}</span>
+                            </header>
+                            {#if !collapsed[plugin.id] && src}
+                                <div class="plugin-card-body" style:height="{heights[plugin.id] ?? FALLBACK_PLUGIN_SIZE}px">
+                                    <PluginFrame
+                                        {plugin}
+                                        {src}
+                                        sessionId={tab.sessionId}
+                                        visible={p.visible}
+                                        onSize={(size) => onPluginSize(plugin.id, size)}
+                                    />
+                                </div>
+                            {/if}
+                        </section>
+                    {/each}
+                {/if}
+            </div>
         </div>
     {/snippet}
 </SidePanel>
 
 <style>
+    /* The region is a flex column so the card stack keeps the only scrollbar
+       (R4: explicit sizing + one scroll owner); the head is a fixed slim row. */
+    .plugin-region {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .plugin-region-head {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 1px 4px 1px 10px;
+        border-bottom: 1px solid var(--divider);
+    }
+    .plugin-region-label {
+        font-size: 10px;
+        letter-spacing: .04em;
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .plugin-region-close {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        line-height: 1;
+        font-size: 14px;
+        color: var(--text-dim);
+        background: none;
+        border: none;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+    }
+    .plugin-region-close:hover {
+        color: var(--text);
+        background: var(--pressed);
+    }
     .plugin-cards {
         flex: 1;
         min-height: 0;

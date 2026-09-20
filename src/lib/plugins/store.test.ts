@@ -151,6 +151,39 @@ describe("auto-open preferences", () => {
   });
 });
 
+describe("manual toggle (context menu / shortcut / panel close button)", () => {
+  it("opens every area that has plugins when both are closed", () => {
+    store.togglePanels("ssh:1", { side: true, strip: true });
+    expect(store.isSideOpen("ssh:1")).toBe(true);
+    expect(store.isStripOpen("ssh:1")).toBe(true);
+  });
+
+  it("only opens areas that actually have plugins", () => {
+    store.togglePanels("ssh:2", { side: true, strip: false });
+    expect(store.isSideOpen("ssh:2")).toBe(true);
+    expect(store.isStripOpen("ssh:2")).toBe(false);
+  });
+
+  it("closes BOTH areas when either one is open", () => {
+    store.openStrip("ssh:3"); // only the strip is open
+    store.togglePanels("ssh:3", { side: true, strip: true });
+    expect(store.isSideOpen("ssh:3")).toBe(false);
+    expect(store.isStripOpen("ssh:3")).toBe(false);
+  });
+
+  it("toggles back on after closing, and closes with no plugins at all", () => {
+    store.openSide("ssh:4");
+    store.togglePanels("ssh:4", { side: true, strip: false });
+    expect(store.isSideOpen("ssh:4")).toBe(false);
+    store.togglePanels("ssh:4", { side: true, strip: false });
+    expect(store.isSideOpen("ssh:4")).toBe(true);
+    // Nothing enabled anywhere: the toggle must stay a no-op, not a crash.
+    store.togglePanels("ssh:5", { side: false, strip: false });
+    expect(store.isSideOpen("ssh:5")).toBe(false);
+    expect(store.isStripOpen("ssh:5")).toBe(false);
+  });
+});
+
 describe("positions & sizes", () => {
   it("defaults and persistence round-trip through localStorage", () => {
     expect(store.sidePosition()).toBe("right");

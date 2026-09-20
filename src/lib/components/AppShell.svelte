@@ -186,6 +186,23 @@
                 },
             },
             {
+                display: keymap.format("panel.plugins"),
+                description: t("shortcut.panel.plugins"),
+                skipInSettings: true,
+                match: e => matchBinding(e, keymap.binding("panel.plugins")),
+                handler: () => {
+                    const tab = app.activeTab();
+                    if (!tab || (tab.type !== "ssh" && tab.type !== "local")) return false;
+                    if (!pluginHostOk || (pluginSidePlugins.length === 0 && pluginStripPlugins.length === 0)) return false;
+                    if (!app.sessionIdForTab(tab.id)) return false;
+                    app.setActivePane(tab.id);
+                    plugins.togglePanels(tab.id, {
+                        side: pluginSidePlugins.length > 0,
+                        strip: pluginStripPlugins.length > 0,
+                    });
+                },
+            },
+            {
                 display: "Ctrl+Tab / Ctrl+Shift+Tab",
                 description: t("shortcut.tab.cycle"),
                 match: e => TAB_CYCLE.some(b => matchBinding(e, b)),
@@ -1040,6 +1057,32 @@
             ]);
         }
 
+        // Plugin regions: a manual show/hide next to the SFTP/AI entries. Upstream
+        // auto-opens them on new tabs; this is the explicit close AND the way
+        // back in after Esc (or a split) closed the column — the store keeps the
+        // per-tab state, so the label mirrors what the click will do.
+        if (
+            pluginHostOk
+            && (pluginSidePlugins.length > 0 || pluginStripPlugins.length > 0)
+            && (tab.type === "ssh" || tab.type === "local")
+        ) {
+            const anyOpen = plugins.isSideOpen(tab.id) || plugins.isStripOpen(tab.id);
+            sections.push([
+                {
+                    label: t(anyOpen ? "plugins.panel.hide" : "plugins.panel.show"),
+                    shortcut: keymap.format("panel.plugins"),
+                    disabled: !app.sessionIdForTab(tab.id),
+                    onClick: () => {
+                        app.setActivePane(tab.id);
+                        plugins.togglePanels(tab.id, {
+                            side: pluginSidePlugins.length > 0,
+                            strip: pluginStripPlugins.length > 0,
+                        });
+                    },
+                },
+            ]);
+        }
+
         // Split panes + multi-window: one desktop-only terminal section.
         // canOpenTabInNewWindow already excludes serial (panes would fight the
         // exclusive port), so a single guard covers both items. Split follows
@@ -1349,6 +1392,7 @@
                     activeTabId={app.activePaneId()}
                     onResizeStart={startPluginSideResize}
                     onResetWidth={resetPluginSideWidth}
+                    onClose={() => plugins.closeSide(app.activePaneId())}
                 />
             {/if}
         {:else if kind === "ai"}
