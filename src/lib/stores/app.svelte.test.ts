@@ -456,11 +456,12 @@ describe("connectTelnetProfile", () => {
       echo_mode: "off",
       backspace: "del",
       login_script: "send super-secret",
-      group_id: null,
+      group_id: "prod",
     });
 
     expect(app.tabs()[1].meta?.echo_mode).toBe("off");
     expect(app.tabs()[1].meta?.profileId).toBe("telnet-1");
+    expect(app.tabs()[1].meta?.groupId).toBe("prod");
     expect(app.tabs()[1].meta?.login_script).toBeUndefined();
   });
 
@@ -482,8 +483,30 @@ describe("connectTelnetProfile", () => {
     app.connectTelnetProfile(legacy);
 
     expect(app.tabs()[1].meta?.echo_mode).toBe("on");
+    expect(app.tabs()[1].meta?.groupId).toBe("");
   });
 });
+
+describe("connectSerialProfile", () => {
+  it.each(["prod", null])("snapshots the connection group %s with the port", async (groupId) => {
+    const app = await loadAppModule();
+    const profile = {
+      id: "serial-1", name: "console", port: "/dev/ttyUSB0",
+      baud_rate: 115200, data_bits: 8, parity: "none", stop_bits: 1,
+      flow_control: "none", xany: false, input_newline: "crlf", output_newline: "raw",
+      local_echo: false, backspace: "del", slow_send: false, input_mode: "text",
+      output_mode: "text", login_script: "", group_id: groupId,
+    };
+
+    app.connectSerialProfile(profile);
+    profile.group_id = "test";
+    profile.port = "/dev/ttyUSB1";
+
+    expect(app.tabs()[1].meta?.groupId).toBe(groupId ?? "");
+    expect(app.tabs()[1].meta?.port).toBe("/dev/ttyUSB0");
+  });
+});
+
 describe("command block split mode", () => {
   it("shares one in-flight load across terminals", async () => {
     let resolveSetting!: (value: unknown) => void;

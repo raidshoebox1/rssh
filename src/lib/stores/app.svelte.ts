@@ -76,6 +76,7 @@ export type SettingsPage =
 
 export interface Group {
   id: string; name: string; color: string; sort_order: number;
+  terminal_waves_enabled: boolean;
 }
 export type ConnectionKind = "ssh" | "forward" | "serial" | "telnet";
 export type ConnectionEditorIntent =
@@ -869,6 +870,7 @@ export function connectSerialProfile(sp: SerialProfile) {
     label: sp.name,
     meta: {
       serialProfileId: sp.id,
+      groupId: sp.group_id ?? "",
       port: sp.port,
       baud_rate: String(sp.baud_rate),
       data_bits: String(sp.data_bits),
@@ -898,6 +900,7 @@ export function connectTelnetProfile(tp: TelnetProfile) {
     label: tp.name,
     meta: {
       profileId: tp.id,
+      groupId: tp.group_id ?? "",
       host: tp.host,
       port: String(tp.port),
       input_newline: tp.input_newline,
