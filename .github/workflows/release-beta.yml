@@ -268,12 +268,20 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest already ships the Android SDK/NDK. android-actions/
+      # setup-android@v3 currently fails on `sdkmanager tools` (the legacy
+      # package was removed from the SDK repo), so assert the preinstall
+      # instead of reinstalling it.
+      - name: Verify Android SDK & NDK
+        run: |
+          test -n "$ANDROID_HOME" || { echo "::error::ANDROID_HOME not set on runner"; exit 1; }
+          test -n "$ANDROID_NDK_LATEST_HOME" || { echo "::error::ANDROID_NDK_LATEST_HOME not set on runner"; exit 1; }
+          echo "Android SDK: $ANDROID_HOME"
+          echo "Android NDK: $ANDROID_NDK_LATEST_HOME"
 
-      # setup-android doesn't export an NDK path, and `${{ env.* }}` can't see the
-      # runner image's default ANDROID_NDK_* vars — so point NDK_HOME at the
-      # runner's pre-installed NDK explicitly (this is what `tauri android` reads).
+      # The runner image exposes the NDK as ANDROID_NDK_LATEST_HOME, but Tauri
+      # reads NDK_HOME — and `${{ env.* }}` can't see runner-image vars, so
+      # export it here (this is what `tauri android` reads).
       - name: Point NDK_HOME at the runner NDK
         run: echo "NDK_HOME=${ANDROID_NDK_LATEST_HOME:?NDK not found on runner}" >> "$GITHUB_ENV"
 
