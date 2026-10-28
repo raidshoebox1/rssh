@@ -57,7 +57,11 @@ jobs:
           - os: macos-26
             target: aarch64-apple-darwin
             name: macos-aarch64
-          - os: macos-14
+          # macos-14 is an arm64 image now (GitHub's runner table); using it for
+          # the x86_64 target cross-compiles and queues behind a 3-CPU M1 pool.
+          # macos-15-intel is the native Intel image, so the x86_64 leg both
+          # builds faster and no longer sits in the arm64 queue.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             name: macos-x86_64
           - os: ubuntu-22.04
