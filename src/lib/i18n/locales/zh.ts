@@ -614,6 +614,7 @@ const zh: Messages = {
   "ai.session.ended_note": "会话已结束",
   "ai.note.skill_loaded": "已加载技能：{name}",
   "ai.note.command_blocked": "rssh 拦截了命令：{cmd}（{reason}）",
+  "ai.note.output_truncated": "模型输出达到上限（{max} tokens），本轮回答可能不完整。可在 设置 → AI 排障 → 输出上限 调大。",
   "ai.bubble.cancelled": "已停止",
   "ai.bubble.thinking_streaming": "思考中…",
   "ai.bubble.thinking_done": "思考过程",
@@ -775,6 +776,11 @@ const zh: Messages = {
   "ai.settings.shell_detect.label": "自动探测远端 shell（含 Windows cmd / PowerShell）",
   "ai.settings.shell_detect.desc": "关闭（默认）时远端假设 POSIX（bash / zsh），命令模板用 `; echo \"...:$?\"`——覆盖 Linux / macOS 远端。开启后，每次 SSH（重）连接时在终端跑一行 echo 探针，自动识别远端是 cmd.exe / PowerShell 还是 POSIX，并按对应 shell 拼接命令。对已连接的会话开启需重连后生效。探针对同一 profile 缓存到进程结束。",
   "ai.settings.shell_detect.save_failed": "保存 shell 探测开关失败: {error}",
+  "ai.settings.output.section": "输出上限",
+  "ai.settings.output.label": "每轮最大输出 tokens",
+  "ai.settings.output.hint": "默认 {def}，范围 {min}–{max}。思考链也计入该额度；修改对之后新建的会话生效。",
+  "ai.settings.output.saved": "已保存",
+  "ai.settings.output.save_failed": "保存输出上限失败: {error}",
   "ai.settings.section.skills": "SKILLS",
   "ai.settings.skills.new": "+ 新建",
   "ai.settings.skills.tag.builtin": "内置",
@@ -983,6 +989,8 @@ const zh: Messages = {
   "error.llm_request_failed": "LLM 请求失败：{err}",
   "error.llm_error_status": "LLM 错误 {status}：{text}",
   "error.llm_stream_read_failed": "LLM stream 读失败：{err}",
+  "error.llm_stream_incomplete": "LLM 响应流意外中断（已接收 {events} 个事件 / {bytes} 字节），本轮可能不完整",
+  "error.llm_error_event": "LLM 返回错误：{err}",
 
   // ── 后端错误（raw-string 迁移批次） ──
   "error.crypto_rng_failed": "随机数生成失败：{err}",

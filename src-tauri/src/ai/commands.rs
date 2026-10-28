@@ -59,11 +59,36 @@ fn key_auto(name: &str) -> String {
 fn key_auto_detect_remote_shell() -> String {
     "ai_auto_detect_remote_shell".into()
 }
+/// Per-turn LLM output budget. Reasoning tokens count against this on most
+/// OpenAI-compatible gateways, so the old hard-coded 4096 truncated long
+/// thinking chains before the model could answer (the user saw a reasoning
+/// bubble vanish with no error). Configurable because providers differ in the
+/// maximum they accept; the actor snapshots the value at session start.
+fn key_max_output_tokens() -> String {
+    "ai_max_output_tokens".into()
+}
+
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
+pub const MIN_MAX_OUTPUT_TOKENS: u32 = 1_024;
+pub const MAX_MAX_OUTPUT_TOKENS: u32 = 65_536;
+
+fn clamp_max_output_tokens(n: u32) -> u32 {
+    n.clamp(MIN_MAX_OUTPUT_TOKENS, MAX_MAX_OUTPUT_TOKENS)
+}
+
+fn read_max_output_tokens(state: &AppState) -> AppResult<u32> {
+    Ok(
+        crate::db::settings::get(&state.db, &key_max_output_tokens())?
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .map(clamp_max_output_tokens)
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+}
 
 // ─── Sync (export/import of provider rows) ─────────────────────────
 //
-// `danger_mode` and the `auto_*` family are deliberately NOT synced — they are
-// per-device safety preferences, not portable config.
+// `danger_mode`, the `auto_*` family and `max_output_tokens` are deliberately
+// NOT synced — per-device safety/capability preferences, not portable config.
 
 /// Build the `ai` payload section: `{ active_provider, providers: [...] }`.
 /// Rows come from the `ai_providers` table — every row the user created rides
@@ -598,6 +623,9 @@ pub async fn ai_session_start_impl(
         // 报错给用户，绝不退化成空名单放行一切（C 模型下唯一的硬不变量）。
         blacklist: command_blacklist::load(&state.db)?,
         max_output_bytes: sanitize::DEFAULT_MAX_OUTPUT_BYTES,
+        // Snapshot at session start: a settings change applies to the next
+        // conversation, never to an in-flight turn with a different budget.
+        max_tokens: read_max_output_tokens(state)?,
         ssh_handle,
         data_dir: state.data_dir.clone(),
         // 本地 PTY: 上面从 PtyHandle.shell_path 推断（确定值）；
@@ -1476,6 +1504,9 @@ pub struct AiSettings {
     /// 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开后跑探针。
     /// 详见 `key_auto_detect_remote_shell` 注释。
     pub auto_detect_remote_shell: bool,
+    /// 单轮 LLM 输出预算（tokens）。思考链也计入，4096 会在长思考时把回答
+    /// 截断在思考阶段；默认 8192，用户可在设置里调到 65536。会话启动时快照。
+    pub max_output_tokens: u32,
 }
 
 /// per-tool auto-approve 字段的默认值 —— 在 ai_settings_get / ai_settings_set 间共享。
@@ -1550,6 +1581,7 @@ pub async fn ai_settings_get_impl(
         auto_web_search: read_auto(state, "web_search")?,
         auto_web_fetch: read_auto(state, "web_fetch")?,
         auto_detect_remote_shell,
+        max_output_tokens: read_max_output_tokens(state)?,
     })
 }
 
@@ -1792,6 +1824,7 @@ pub struct AiSettingsPatch {
     pub auto_web_search: Option<bool>,
     pub auto_web_fetch: Option<bool>,
     pub auto_detect_remote_shell: Option<bool>,
+    pub max_output_tokens: Option<u32>,
 }
 
 #[tauri::command]
@@ -1815,6 +1848,7 @@ pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> A
         auto_web_search,
         auto_web_fetch,
         auto_detect_remote_shell,
+        max_output_tokens,
     } = patch;
     // provider 字段 = 激活哪个行（校验存在，fail-fast）。行本身的
     // name/protocol/model/endpoint/api_key 归 ai_provider_save 管。
@@ -1857,13 +1891,41 @@ pub async fn ai_settings_set_impl(state: &AppState, patch: AiSettingsPatch) -> A
             if on { "1" } else { "0" },
         )?;
     }
+    // Clamp rather than reject: the UI enforces the range, but a stale client
+    // or a synced/imported value must never turn into an unbounded budget.
+    if let Some(n) = max_output_tokens {
+        crate::db::settings::set(
+            &state.db,
+            &key_max_output_tokens(),
+            &clamp_max_output_tokens(n).to_string(),
+        )?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AiSettingsPatch, AiTarget};
+    use super::{
+        clamp_max_output_tokens, AiSettingsPatch, AiTarget, DEFAULT_MAX_OUTPUT_TOKENS,
+        MAX_MAX_OUTPUT_TOKENS, MIN_MAX_OUTPUT_TOKENS,
+    };
     use serde_json::json;
+
+    #[test]
+    fn max_output_tokens_default_is_large_enough_for_reasoning() {
+        // The old hard-coded 4096 could be consumed entirely by a thinking
+        // chain. The default must leave room for an answer as well.
+        assert!(DEFAULT_MAX_OUTPUT_TOKENS >= 8_192);
+        assert!(MIN_MAX_OUTPUT_TOKENS < DEFAULT_MAX_OUTPUT_TOKENS);
+        assert!(MAX_MAX_OUTPUT_TOKENS > DEFAULT_MAX_OUTPUT_TOKENS);
+    }
+
+    #[test]
+    fn max_output_tokens_is_clamped_to_the_supported_range() {
+        assert_eq!(clamp_max_output_tokens(0), MIN_MAX_OUTPUT_TOKENS);
+        assert_eq!(clamp_max_output_tokens(u32::MAX), MAX_MAX_OUTPUT_TOKENS);
+        assert_eq!(clamp_max_output_tokens(16_384), 16_384);
+    }
 
     #[test]
     fn patch_deserializes_camelcase_wire_shape() {
@@ -1874,12 +1936,14 @@ mod tests {
             "dangerMode": true,
             "autoRunCommand": false,
             "autoDetectRemoteShell": true,
+            "maxOutputTokens": 16_384,
         }))
         .unwrap();
         assert_eq!(p.provider.as_deref(), Some("provider-ab12c"));
         assert_eq!(p.danger_mode, Some(true));
         assert_eq!(p.auto_run_command, Some(false));
         assert_eq!(p.auto_detect_remote_shell, Some(true));
+        assert_eq!(p.max_output_tokens, Some(16_384));
     }
 
     #[test]

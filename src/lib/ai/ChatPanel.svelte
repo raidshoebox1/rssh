@@ -754,7 +754,7 @@
                         <div class="bubble assistant md" data-msg-id={item.id} class:streaming={item.streaming} class:cancelled={item.cancelled}>
                             {#if item.text}
                                 {@html renderMarkdown(item.text)}
-                            {:else if !item.cancelled}
+                            {:else if item.streaming}
                                 …
                             {/if}
                             {#if item.cancelled}

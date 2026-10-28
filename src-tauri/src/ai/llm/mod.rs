@@ -177,6 +177,22 @@ pub fn build_client(
 
 // ─── SSE 解析公共工具 ────────────────────────────────────────────
 
+/// Extract a human-readable message from an in-stream provider error payload.
+/// OpenAI-compatible gateways send `{"error":{"message":...}}` (sometimes a
+/// bare string), Anthropic sends `{"type":"error","error":{...}}`. The old
+/// parsers ignored these objects entirely, so an overloaded backend looked
+/// exactly like a normal end-of-stream. Truncated so a giant upstream body
+/// can't flood the chat bubble / audit log.
+pub(crate) fn provider_error_text(err: &serde_json::Value) -> String {
+    let text = err
+        .get("message")
+        .and_then(|m| m.as_str())
+        .or_else(|| err.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| err.to_string());
+    text.chars().take(1_000).collect()
+}
+
 /// 增量 SSE 解析器：feed 接收任意 byte chunk，返回完整事件的 data 字符串列表。
 pub(crate) struct SseParser {
     /// Decoded-but-not-yet-terminated event text (split on `\n\n`).
@@ -202,6 +218,23 @@ impl SseParser {
     /// 接收原始字节并自己处理 UTF-8 边界 —— 调用方不再各自 from_utf8_lossy。
     pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
         self.decode_into_buf(chunk);
+        self.drain_events()
+    }
+
+    /// Flush a trailing event that the body ended without terminating with a
+    /// blank line. Some gateways close right after `data: [DONE]` (or the final
+    /// `finish_reason` chunk); dropping it made a complete stream look like a
+    /// truncated one. Content in that trailing event was already lost before
+    /// this method existed, so only the terminator/usage scan depends on it.
+    pub fn finish(&mut self) -> Vec<String> {
+        self.pending.clear();
+        if !self.buf.is_empty() {
+            self.buf.push_str("\n\n");
+        }
+        self.drain_events()
+    }
+
+    fn drain_events(&mut self) -> Vec<String> {
         let mut events = Vec::new();
         loop {
             let sep_idx = self.buf.find("\n\n").or_else(|| self.buf.find("\r\n\r\n"));
@@ -271,7 +304,7 @@ impl SseParser {
 
 #[cfg(test)]
 mod sse_tests {
-    use super::SseParser;
+    use super::{provider_error_text, SseParser};
 
     #[test]
     fn reassembles_multibyte_char_split_across_chunks() {
@@ -304,5 +337,35 @@ mod sse_tests {
         let mut p = SseParser::new();
         let events = p.feed(b"data: a\n\ndata: b\n\n");
         assert_eq!(events, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn finish_flushes_a_trailing_event_without_a_blank_line() {
+        let mut p = SseParser::new();
+        assert!(p.feed(b"data: [DONE]").is_empty());
+        assert_eq!(p.finish(), vec!["[DONE]".to_string()]);
+    }
+
+    #[test]
+    fn finish_does_not_resurrect_already_drained_events() {
+        let mut p = SseParser::new();
+        assert_eq!(p.feed(b"data: a\n\n"), vec!["a".to_string()]);
+        assert!(p.finish().is_empty());
+    }
+
+    #[test]
+    fn provider_error_text_prefers_message_and_bounds_size() {
+        assert_eq!(
+            provider_error_text(&serde_json::json!({"message": "overloaded"})),
+            "overloaded"
+        );
+        assert_eq!(provider_error_text(&serde_json::json!("boom")), "boom");
+        let huge = "x".repeat(5_000);
+        assert_eq!(
+            provider_error_text(&serde_json::json!({ "message": huge }))
+                .chars()
+                .count(),
+            1_000
+        );
     }
 }

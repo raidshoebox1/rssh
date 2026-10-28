@@ -69,6 +69,8 @@ export interface AiSettings {
   auto_web_fetch: boolean;
   /** 远端 shell 自动探测：off 时远端假设 POSIX；on 时 AI panel 打开时发探针。默认 off。 */
   auto_detect_remote_shell: boolean;
+  /** 单轮 LLM 输出预算（tokens，思考链也计入）。会话启动时快照，改后对新会话生效。 */
+  max_output_tokens: number;
 }
 
 /** AI 工具卡片 kind —— 后端 emit command_proposed 时打的 tag；前端按它查 auto_* 设置。

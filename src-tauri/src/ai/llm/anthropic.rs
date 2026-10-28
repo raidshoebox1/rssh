@@ -12,8 +12,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, ModelInfo, SseParser,
-    ToolCall,
+    provider_error_text, ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient,
+    ModelInfo, SseParser, ToolCall,
 };
 use crate::error::{error_chain, AppError, AppResult};
 
@@ -238,6 +238,12 @@ impl LlmClient for AnthropicClient {
 
         let mut parser = SseParser::new();
         let mut stream = resp.bytes_stream();
+        // `message_stop` (or a final message_delta carrying stop_reason) is the
+        // only proof of a complete turn. Bare EOF usually means a proxy cut the
+        // long thinking stream; treating it as success silently truncated.
+        let mut saw_terminal = false;
+        let mut stream_bytes = 0usize;
+        let mut stream_events = 0usize;
         while let Some(chunk) = stream.next().await {
             let bytes = chunk.map_err(|e| {
                 AppError::other(
@@ -245,12 +251,21 @@ impl LlmClient for AnthropicClient {
                     serde_json::json!({ "err": error_chain(&e) }),
                 )
             })?;
+            stream_bytes += bytes.len();
             for ev_data in parser.feed(&bytes) {
+                stream_events += 1;
                 let v: serde_json::Value = match serde_json::from_str(&ev_data) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
                 let ev_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ev_type == "error" {
+                    let err = v.get("error").cloned().unwrap_or(v.clone());
+                    return Err(AppError::other(
+                        "llm_error_event",
+                        serde_json::json!({ "err": provider_error_text(&err) }),
+                    ));
+                }
                 match ev_type {
                     "message_start" => {
                         tokens_in = v["message"]["usage"]["input_tokens"]
@@ -296,16 +311,57 @@ impl LlmClient for AnthropicClient {
                     }
                     "message_delta" => {
                         if let Some(reason) = v["delta"]["stop_reason"].as_str() {
-                            stop_reason = reason.to_string();
+                            if !reason.is_empty() {
+                                stop_reason = reason.to_string();
+                                saw_terminal = true;
+                            }
                         }
                         if let Some(o) = v["usage"]["output_tokens"].as_u64() {
                             tokens_out = Some(o as u32);
                         }
                     }
-                    "message_stop" => {}
+                    "message_stop" => saw_terminal = true,
                     _ => {}
                 }
             }
+        }
+
+        // Gateways that close without the final blank line: flush the trailing
+        // event so a real message_stop isn't mistaken for a dropped stream.
+        for ev_data in parser.finish() {
+            stream_events += 1;
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev_data) else {
+                continue;
+            };
+            match v.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                "error" => {
+                    let err = v.get("error").cloned().unwrap_or(v.clone());
+                    return Err(AppError::other(
+                        "llm_error_event",
+                        serde_json::json!({ "err": provider_error_text(&err) }),
+                    ));
+                }
+                "message_stop" => saw_terminal = true,
+                "message_delta" => {
+                    if let Some(reason) = v["delta"]["stop_reason"].as_str() {
+                        if !reason.is_empty() {
+                            stop_reason = reason.to_string();
+                            saw_terminal = true;
+                        }
+                    }
+                    if let Some(o) = v["usage"]["output_tokens"].as_u64() {
+                        tokens_out = Some(o as u32);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !saw_terminal {
+            return Err(AppError::other(
+                "llm_stream_incomplete",
+                serde_json::json!({ "events": stream_events, "bytes": stream_bytes }),
+            ));
         }
 
         let tcs: Vec<ToolCall> = tool_calls
