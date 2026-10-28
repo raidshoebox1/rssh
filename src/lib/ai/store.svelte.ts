@@ -1757,6 +1757,7 @@ type AiSettingsPatch = Partial<{
   autoWebSearch: boolean;
   autoWebFetch: boolean;
   autoDetectRemoteShell: boolean;
+  maxOutputTokens: number;
 }>;
 
 type AutoApprovalSettingKey =
@@ -2034,17 +2035,22 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
     id: string; text: string; cancelled?: boolean;
     reasoning?: string | null;
     tokens_in?: number | null; tokens_out?: number | null;
+    stop_reason?: string | null;
+    truncated?: boolean;
+    max_output_tokens?: number | null;
   }>(`ai:assistant_message_end:${tab}`, (e) => {
     const arr = _chatByTab[tab] ?? [];
     for (let i = arr.length - 1; i >= 0; i--) {
       const item = arr[i];
       if (item.kind === "assistant" && item.id === e.payload.id) {
+        const wasStreaming = item.streaming === true;
         const isEmpty = !e.payload.text || e.payload.text.length === 0;
         // cancelled=true 时即使 text 空也要保留气泡——UI 模板会渲染本地化的
         // "已停止"徽章，告诉用户这一轮被自己打断了。
-        // 只有"纯 tool_use 轮次"（chat 没产文本只产 tool_calls，cancelled=false）
-        // 或 chat 失败（empty + cancelled=false）才移除气泡。
-        if (isEmpty && !e.payload.cancelled) {
+        // 除纯 tool_use 轮次外，只要已经产生过正文或思考链也保留：思考到一半
+        // 被截断/上游断流时，删掉整个气泡等于把唯一的诊断线索也抹了。
+        const carriedContent = !!item.text || !!item.reasoning;
+        if (isEmpty && !carriedContent && !e.payload.cancelled) {
           _chatByTab[tab] = [...arr.slice(0, i), ...arr.slice(i + 1)];
         } else {
           // 防御：cancel emit 的 payload.text = 后端 captured（sink 累积）；前端 item.text =
@@ -2061,6 +2067,18 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
             cancelled: e.payload.cancelled === true,
           };
           _chatByTab[tab] = [...arr.slice(0, i), replaced, ...arr.slice(i + 1)];
+        }
+        // Output-budget exhaustion (finish_reason=length / max_tokens) used to
+        // end the turn silently; a reasoning-only bubble then vanished with no
+        // trace. Leave an explicit note so "thinking stopped halfway" is
+        // diagnosable and points at the setting that fixes it.
+        if (e.payload.truncated && wasStreaming) {
+          const max = e.payload.max_output_tokens ?? _settings?.max_output_tokens ?? 0;
+          pushChat(tab, {
+            kind: "note",
+            text: t("ai.note.output_truncated", { max: max > 0 ? max : "?" }),
+            at: Date.now(),
+          });
         }
         schedulePersist(tab);
         return;
@@ -2413,7 +2431,10 @@ async function attachListeners(info: AiSessionInfo, generation: number) {
   });
 
   await addListener<{ message: string }>(`ai:error:${tab}`, (e) => {
-    pushChat(tab, { kind: "error", text: e.payload.message, at: Date.now() });
+    // Backend errors are CodedMsg wire strings (`__rssh_err__|{...}`). Rendering
+    // them raw made a dropped stream look like unreadable noise instead of
+    // "LLM stream read failed: ..."; errMsg() is the single localization entry.
+    pushChat(tab, { kind: "error", text: errMsg(e.payload.message), at: Date.now() });
   });
 
   await addListener<{}>(`ai:session_ended:${tab}`, () => {

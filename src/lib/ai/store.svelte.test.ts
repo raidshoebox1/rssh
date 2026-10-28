@@ -1727,6 +1727,7 @@ describe("tab lifecycle", () => {
       auto_patch_diff: false,
       auto_patch_mv: false,
       auto_detect_remote_shell: false,
+      max_output_tokens: 8192,
     };
     let currentSettings = enabledSettings;
     invokeMock.mockImplementation(async (command: string) => {
@@ -1786,6 +1787,7 @@ describe("tab lifecycle", () => {
       auto_patch_diff: false,
       auto_patch_mv: false,
       auto_detect_remote_shell: false,
+      max_output_tokens: 8192,
     };
     let backendSettings = enabledSettings;
     let resolveDisable!: () => void;
@@ -1854,6 +1856,7 @@ describe("tab lifecycle", () => {
       auto_patch_diff: false,
       auto_patch_mv: false,
       auto_detect_remote_shell: false,
+      max_output_tokens: 8192,
     };
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "ai_settings_get") return enabledSettings;
@@ -2480,6 +2483,53 @@ describe("reasoning stream", () => {
 
     const [item] = ai.chatItems("tab-a");
     expect(item.kind === "assistant" && item.reasoning).toBe("kept");
+  });
+
+  it("keeps a reasoning-only bubble when the turn ends without answer text", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "thinking" } });
+    // Truncated / failed turns end with no text; deleting the bubble used to
+    // erase the only visible evidence that the model had started reasoning.
+    find("ai:assistant_message_end")?.({ payload: { id: "r1", text: "" } });
+
+    const items = ai.chatItems("tab-a");
+    expect(items).toHaveLength(1);
+    expect(items[0].kind === "assistant" && items[0].reasoning).toBe("thinking");
+    expect(items[0].kind === "assistant" && items[0].streaming).toBe(false);
+  });
+
+  it("adds a note when the output budget truncated the turn", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:assistant_message_start")?.({ payload: { id: "r1" } });
+    find("ai:assistant_reasoning_delta")?.({ payload: { id: "r1", reasoning: "half" } });
+    find("ai:assistant_message_end")?.({ payload: {
+      id: "r1",
+      text: "",
+      stop_reason: "length",
+      truncated: true,
+      max_output_tokens: 8192,
+    } });
+
+    const items = ai.chatItems("tab-a");
+    expect(items[0].kind).toBe("assistant");
+    expect(items[1].kind).toBe("note");
+    expect(items[1].kind === "note" && items[1].text).toContain("8192");
+  });
+
+  it("localizes coded backend errors instead of dumping the wire string", async () => {
+    const { ai, find } = await setupSession();
+    find("ai:error")?.({ payload: {
+      message: `__rssh_err__|{"code":"llm_stream_incomplete","params":{"events":3,"bytes":42}}`,
+    } });
+
+    const item = ai.chatItems("tab-a").find((i) => i.kind === "error");
+    expect(item?.kind).toBe("error");
+    if (item?.kind === "error") {
+      expect(item.text).not.toContain("__rssh_err__");
+      expect(item.text).toContain("3");
+      expect(item.text).toContain("42");
+    }
   });
 
   it("strips reasoningDone from the persisted timeline but keeps reasoning", async () => {

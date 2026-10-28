@@ -18,6 +18,12 @@
     // Free-model referral shown on its own line under the BYOK notice.
     const ORCA_URL = "https://www.orcarouter.ai/ref/ref_183b245f43cae453d9da";
 
+    // Output budget bounds — keep in sync with src-tauri/src/ai/commands.rs
+    // (MIN/MAX/DEFAULT_MAX_OUTPUT_TOKENS). The backend clamps regardless.
+    const MIN_OUTPUT_TOKENS = 1024;
+    const MAX_OUTPUT_TOKENS = 65536;
+    const DEFAULT_OUTPUT_TOKENS = 8192;
+
     // ─── Provider 管理（动态发现式：列表 + 内联表单）────────────
     // 数据模型：ai_providers 表一行一个 provider（name/protocol/endpoint/model
     // + key 在 secret store）。协议三选一；endpoint 必填，chips 一键填官方值。
@@ -89,6 +95,37 @@
     let autoDetectRemoteShell = $state(false);
     let savingShellDetect = $state(false);
     let shellDetectNote = $state<string | null>(null);
+
+    // ─── 输出上限（每轮 LLM 输出预算）──────────────────────────────
+    // 思考链也占用这个预算：4096 时代长思考会在产出答案前被截断，UI 只剩
+    // 一个消失的思考气泡。这里允许用户按 provider 能力调大；会话启动时快照。
+    let maxOutputTokens = $state(DEFAULT_OUTPUT_TOKENS);
+    let savingOutput = $state(false);
+    let outputNote = $state<string | null>(null);
+
+    function normalizeOutputTokens(raw: number): number {
+        const n = Number.isFinite(raw) ? Math.round(raw) : DEFAULT_OUTPUT_TOKENS;
+        return Math.min(MAX_OUTPUT_TOKENS, Math.max(MIN_OUTPUT_TOKENS, n));
+    }
+
+    async function persistMaxOutputTokens() {
+        const next = normalizeOutputTokens(maxOutputTokens);
+        maxOutputTokens = next;
+        if (ai.settings()?.max_output_tokens === next) return;
+        savingOutput = true;
+        outputNote = null;
+        try {
+            await ai.saveSettings({ maxOutputTokens: next });
+            outputNote = t("ai.settings.output.saved");
+        } catch (err) {
+            // Revert to the last persisted value: a silent local/DB split would
+            // make the user believe the next session got the bigger budget.
+            outputNote = t("ai.settings.output.save_failed", { error: errMsg(err) });
+            maxOutputTokens = ai.settings()?.max_output_tokens ?? DEFAULT_OUTPUT_TOKENS;
+        } finally {
+            savingOutput = false;
+        }
+    }
 
     async function persistAutoDetectShell(next: boolean) {
         savingShellDetect = true;
@@ -306,6 +343,7 @@
         autoWebSearch = s.auto_web_search;
         autoWebFetch = s.auto_web_fetch;
         autoDetectRemoteShell = s.auto_detect_remote_shell;
+        maxOutputTokens = s.max_output_tokens;
         await refreshProviders();
         await refreshSkills();
         await refreshRedactRules();
@@ -650,6 +688,28 @@
         {/each}
 
         {#if byokNote}<span class="note">{byokNote}</span>{/if}
+    </div>
+
+    <div class="section-label">{t("ai.settings.output.section")}</div>
+    <div class="card surface-raised output-card">
+        <div class="output-row">
+            <label for="ai-max-output-tokens">{t("ai.settings.output.label")}</label>
+            <input
+                id="ai-max-output-tokens"
+                type="number"
+                min={MIN_OUTPUT_TOKENS}
+                max={MAX_OUTPUT_TOKENS}
+                step="1024"
+                bind:value={maxOutputTokens}
+                disabled={savingOutput}
+                onblur={persistMaxOutputTokens}
+                onkeydown={(e) => { if (e.key === "Enter") persistMaxOutputTokens(); }}
+            />
+        </div>
+        <span class="hint">{t("ai.settings.output.hint", {
+            def: DEFAULT_OUTPUT_TOKENS, min: MIN_OUTPUT_TOKENS, max: MAX_OUTPUT_TOKENS,
+        })}</span>
+        {#if outputNote}<span class="note">{outputNote}</span>{/if}
     </div>
 
     <div class="section-label">{t("ai.settings.danger.section")}</div>
@@ -1140,11 +1200,28 @@
        本地只加 padding + 内布局，跟 SyncScreen 同款。 */
     .provider-card,
     .danger-card,
-    .list-card {
+    .list-card,
+    .output-card {
         padding: 18px;
         display: flex;
         flex-direction: column;
         gap: 14px;
+    }
+
+    /* Output budget row: label + numeric input on one line, hint underneath. */
+    .output-card { gap: 8px; }
+    .output-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    .output-row label {
+        font-size: 12px;
+        color: var(--text-sub);
+    }
+    .output-row input[type="number"] {
+        width: 140px;
     }
 
     /* 卡片内顶部行：说明在左、操作按钮（如脱敏规则的"新建"）在右。 */

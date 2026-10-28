@@ -18,8 +18,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient, ModelInfo, SseParser,
-    ToolCall,
+    provider_error_text, ChatDelta, ChatMessage, ChatRequest, ChatResponse, DeltaSink, LlmClient,
+    ModelInfo, SseParser, ToolCall,
 };
 use crate::error::{error_chain, AppError, AppResult};
 
@@ -280,25 +280,47 @@ async fn chat(
 
     let mut parser = SseParser::new();
     let mut stream = resp.bytes_stream();
+    // A cleanly finished stream must say so: `[DONE]` or a non-empty
+    // finish_reason. HTTP EOF alone is not proof of completion — gateways and
+    // proxies cut idle/overloaded streams mid-reasoning, and treating that as
+    // success silently dropped the thinking bubble (no error, no answer).
+    let mut saw_terminal = false;
+    let mut stream_bytes = 0usize;
+    let mut stream_events = 0usize;
     'stream: while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| {
             AppError::other("llm_stream_read_failed", json!({ "err": error_chain(&e) }))
         })?;
+        stream_bytes += bytes.len();
         for ev_data in parser.feed(&bytes) {
+            stream_events += 1;
             if ev_data.trim() == "[DONE]" {
+                saw_terminal = true;
                 break 'stream;
             }
             let v: serde_json::Value = match serde_json::from_str(&ev_data) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            // In-stream failures (overload / rate limit / gateway error) are
+            // data frames, not HTTP errors. Ignoring them made a failed turn
+            // look like a completed one.
+            if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
+                return Err(AppError::other(
+                    "llm_error_event",
+                    json!({ "err": provider_error_text(err) }),
+                ));
+            }
             if let Some(usage) = v.get("usage") {
                 tokens_in = usage["prompt_tokens"].as_u64().map(|n| n as u32);
                 tokens_out = usage["completion_tokens"].as_u64().map(|n| n as u32);
             }
             if let Some(choice) = v["choices"].get(0) {
                 if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
-                    finish_reason = reason.to_string();
+                    if !reason.is_empty() {
+                        finish_reason = reason.to_string();
+                        saw_terminal = true;
+                    }
                 }
                 let delta = &choice["delta"];
                 if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
@@ -354,6 +376,47 @@ async fn chat(
                 }
             }
         }
+    }
+
+    // Gateways that omit the final blank line still get their terminator
+    // honoured; only the terminal marker/usage is read, content deltas in a
+    // trailing fragment were never surfaced before either.
+    for ev_data in parser.finish() {
+        stream_events += 1;
+        if ev_data.trim() == "[DONE]" {
+            saw_terminal = true;
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev_data) else {
+            continue;
+        };
+        if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
+            return Err(AppError::other(
+                "llm_error_event",
+                json!({ "err": provider_error_text(err) }),
+            ));
+        }
+        if let Some(usage) = v.get("usage") {
+            tokens_in = usage["prompt_tokens"].as_u64().map(|n| n as u32);
+            tokens_out = usage["completion_tokens"].as_u64().map(|n| n as u32);
+        }
+        if let Some(reason) = v["choices"]
+            .get(0)
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|r| r.as_str())
+        {
+            if !reason.is_empty() {
+                finish_reason = reason.to_string();
+                saw_terminal = true;
+            }
+        }
+    }
+
+    if !saw_terminal {
+        return Err(AppError::other(
+            "llm_stream_incomplete",
+            json!({ "events": stream_events, "bytes": stream_bytes }),
+        ));
     }
 
     let tcs: Vec<ToolCall> = tool_calls

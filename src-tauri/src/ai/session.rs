@@ -308,6 +308,9 @@ pub struct SessionConfig {
     /// 同 redact_rules —— 会话期内不变，用户中途改黑名单不影响运行中的会话。
     pub blacklist: Blacklist,
     pub max_output_bytes: usize,
+    /// Output token budget for one LLM turn (reasoning included on most
+    /// OpenAI-compatible gateways). Snapshotted from settings at session start.
+    pub max_tokens: u32,
     /// SSH target 的连接 handle（本地 PTY target 为 None）。
     /// download_file 工具复用这个 handle 起 SFTP 子系统。
     /// RebindTarget 时由 actor 更新（指向新的 SSH 连接）。
@@ -510,6 +513,14 @@ fn rollback_history(
     let dropped = history.len() - cutoff;
     history.truncate(cutoff);
     Ok(dropped)
+}
+
+/// True when the provider stopped because the output budget ran out. The UI
+/// turns this into a visible "answer may be incomplete" note instead of
+/// silently accepting a half-finished turn (and, before this, deleting the
+/// whole reasoning bubble when no answer text had arrived yet).
+fn output_was_truncated(stop_reason: &str) -> bool {
+    matches!(stop_reason, "length" | "max_tokens")
 }
 
 impl Actor {
@@ -790,12 +801,13 @@ impl Actor {
                 self.cfg.shell_kind.prompt_section()
             );
 
+            let max_output_tokens = self.cfg.max_tokens;
             let req = ChatRequest {
                 system_prompt,
                 messages: redacted_history.clone(),
                 tools: tools::all_tools(),
                 model: self.cfg.model.clone(),
-                max_tokens: 4096,
+                max_tokens: max_output_tokens,
             };
 
             self.audit_push(AuditKind::LlmRequest {
@@ -951,6 +963,12 @@ impl Actor {
                     "reasoning": resp.reasoning_content,
                     "tokens_in": resp.tokens_in,
                     "tokens_out": resp.tokens_out,
+                    // Diagnostics + truncation notice. Providers spell the
+                    // exhausted-budget stop differently: OpenAI/DeepSeek use
+                    // "length", Anthropic uses "max_tokens".
+                    "stop_reason": resp.stop_reason,
+                    "truncated": output_was_truncated(&resp.stop_reason),
+                    "max_output_tokens": max_output_tokens,
                 }),
             );
 
@@ -2189,5 +2207,18 @@ mod tests {
 
         let err = resolve_loadable_skill("missing", &[]).unwrap_err();
         assert!(err.contains("Unknown skill id: missing"));
+    }
+
+    #[test]
+    fn output_was_truncated_matches_provider_spellings() {
+        // OpenAI / DeepSeek
+        assert!(output_was_truncated("length"));
+        // Anthropic
+        assert!(output_was_truncated("max_tokens"));
+        // Normal completions must never raise the truncation notice.
+        assert!(!output_was_truncated("stop"));
+        assert!(!output_was_truncated("end_turn"));
+        assert!(!output_was_truncated("tool_calls"));
+        assert!(!output_was_truncated(""));
     }
 }

@@ -611,6 +611,7 @@ const en = {
   "ai.session.ended_note": "Session ended",
   "ai.note.skill_loaded": "Loaded skill: {name}",
   "ai.note.command_blocked": "rssh blocked the command: {cmd} ({reason})",
+  "ai.note.output_truncated": "The model hit the output limit ({max} tokens); this turn may be incomplete. Raise it in Settings → AI Diagnose → Output limit.",
   "ai.bubble.cancelled": "stopped",
   "ai.bubble.thinking_streaming": "Thinking…",
   "ai.bubble.thinking_done": "Reasoning",
@@ -772,6 +773,11 @@ const en = {
   "ai.settings.shell_detect.label": "Auto-detect remote shell (Windows cmd / PowerShell support)",
   "ai.settings.shell_detect.desc": "When OFF (default), the remote is assumed POSIX (bash / zsh) — commands use `; echo \"...:$?\"`. Covers ~99% Linux / macOS remotes with zero overhead. When ON, a one-line echo probe runs in the terminal on each SSH (re)connect to classify the remote as cmd.exe / PowerShell / POSIX, then picks the right sentinel template. Enabling it on an already-connected session takes effect on the next reconnect. Probe result is cached per profile for the rest of the process lifetime.",
   "ai.settings.shell_detect.save_failed": "Failed to save shell detect toggle: {error}",
+  "ai.settings.output.section": "OUTPUT LIMIT",
+  "ai.settings.output.label": "Max output tokens per turn",
+  "ai.settings.output.hint": "Default {def}, range {min}–{max}. The thinking chain counts toward this budget; changes apply to new sessions.",
+  "ai.settings.output.saved": "Saved",
+  "ai.settings.output.save_failed": "Failed to save output limit: {error}",
   "ai.settings.section.skills": "SKILLS",
   "ai.settings.skills.new": "+ New",
   "ai.settings.skills.tag.builtin": "Builtin",
@@ -980,6 +986,8 @@ const en = {
   "error.llm_request_failed": "LLM request failed: {err}",
   "error.llm_error_status": "LLM error {status}: {text}",
   "error.llm_stream_read_failed": "LLM stream read failed: {err}",
+  "error.llm_stream_incomplete": "LLM stream ended unexpectedly (after {events} events / {bytes} bytes); the turn may be incomplete",
+  "error.llm_error_event": "LLM returned an error: {err}",
 
   // ── Backend errors (raw-string migration batch) ──
   "error.crypto_rng_failed": "RNG failed: {err}",
